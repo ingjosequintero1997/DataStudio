@@ -1,0 +1,90 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background-color: #060913;
+  color: #e2e8f0;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(255,255,255,0.02);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.1);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0,120,212,0.5);
+}
+
+/* Resize handle */
+.resize-handle-x {
+  cursor: col-resize;
+  width: 4px;
+  background: rgba(255,255,255,0.04);
+  transition: background 0.2s;
+}
+.resize-handle-x:hover, .resize-handle-x.dragging {
+  background: rgba(0,120,212,0.6);
+}
+.resize-handle-y {
+  cursor: row-resize;
+  height: 4px;
+  background: rgba(255,255,255,0.04);
+  transition: background 0.2s;
+}
+.resize-handle-y:hover, .resize-handle-y.dragging {
+  background: #0078d4;
+}
+
+/* Glow animations */
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 6px rgba(0,120,212,0.3); }
+  50% { box-shadow: 0 0 20px rgba(0,120,212,0.85); }
+}
+@keyframes glow-line {
+  0% { transform: translateX(-100%); opacity: 0; }
+  40% { opacity: 1; }
+  100% { transform: translateX(100%); opacity: 0; }
+}
+.glow-border {
+  animation: glow-pulse 1.4s ease-in-out infinite;
+}
+.glow-line {
+  animation: glow-line 1.6s linear infinite;
+}
+
+/* Shimmer (CommandBar executing) */
+@keyframes shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+/* Spinner */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.animate-spin {
+  animation: spin 0.8s linear infinite;
+}
