@@ -126,33 +126,46 @@ export default function ResultsTable({ result, error, isExecuting, visibleColumn
       <div className="flex-1 overflow-hidden">
         <AutoSizer>
           {({ width, height }) => {
+            const effectiveWidth = Math.max(totalWidth, width)
             const listHeight = height - HEADER_HEIGHT
             return (
-              <div style={{ width, height }}>
-                <div
-                  className="flex border-b border-ssms-border bg-[#12121e] shrink-0"
-                  style={{ height: HEADER_HEIGHT, width: Math.max(totalWidth, width), overflow: 'hidden' }}
-                >
+              <div style={{ width, height, overflowX: 'auto', overflowY: 'hidden',
+                scrollbarColor: '#334155 #0d1117', scrollbarWidth: 'thin' }}
+                id="results-scroll-x"
+                onScroll={e => {
+                  const list = document.querySelector('#results-scroll-x .results-vscroll')
+                  if (list) list.scrollLeft = e.currentTarget.scrollLeft
+                }}
+              >
+                <div style={{ width: effectiveWidth, height }}>
                   <div
-                    className="text-ssms-textDim text-[10px] uppercase px-2 border-r border-ssms-border shrink-0 flex items-center font-bold"
-                    style={{ width: 44 }}
+                    className="flex border-b border-ssms-border bg-[#12121e] shrink-0"
+                    style={{ height: HEADER_HEIGHT, width: effectiveWidth, position: 'sticky', top: 0, zIndex: 2 }}
                   >
-                    #
-                  </div>
-                  {displayColumns.map(col => (
                     <div
-                      key={col}
-                      className="text-ssms-text text-xs font-bold px-2 border-r border-ssms-border shrink-0 flex items-center truncate"
-                      style={{ width: colWidths[col] || 100 }}
-                      title={col}
+                      className="text-ssms-textDim text-[10px] uppercase px-2 border-r border-ssms-border shrink-0 flex items-center font-bold"
+                      style={{ width: 44 }}
                     >
-                      {col}
+                      #
                     </div>
-                  ))}
+                    {displayColumns.map(col => (
+                      <div
+                        key={col}
+                        className="text-ssms-text text-xs font-bold px-2 border-r border-ssms-border shrink-0 flex items-center truncate"
+                        style={{ width: colWidths[col] || 100 }}
+                        title={col}
+                      >
+                        {col}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="results-vscroll" style={{ overflowY: 'auto', overflowX: 'hidden', height: listHeight,
+                    scrollbarColor: '#334155 #0d1117', scrollbarWidth: 'thin' }}>
+                    <List height={listHeight} itemCount={rows.length} itemSize={ROW_HEIGHT} width={effectiveWidth} style={{ overflowX: 'hidden' }}>
+                      {Row}
+                    </List>
+                  </div>
                 </div>
-                <List height={listHeight} itemCount={rows.length} itemSize={ROW_HEIGHT} width={Math.max(totalWidth, width)}>
-                  {Row}
-                </List>
               </div>
             )
           }}

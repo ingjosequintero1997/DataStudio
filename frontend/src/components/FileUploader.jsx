@@ -26,12 +26,25 @@ function sanitizeName(filename) {
 async function convertToCSV(file) {
   const buffer = await file.arrayBuffer()
   if (isExcel(file.name)) {
-    const wb = XLSX.read(buffer, { type: 'array' })
+    const wb = XLSX.read(buffer, { type: 'array', cellDates: true, dense: true })
+    // Try each sheet until one has data
+    for (const sheetName of wb.SheetNames) {
+      const sheet = wb.Sheets[sheetName]
+      if (!sheet['!ref']) continue
+      let csv = XLSX.utils.sheet_to_csv(sheet, { strip: true, blankrows: false })
+      // Remove BOM if present
+      csv = csv.replace(/^\uFEFF/, '')
+      // Check the CSV actually has rows with content
+      const lines = csv.split('\n').filter(l => l.trim().replace(/,/g,'') !== '')
+      if (lines.length > 1) return csv
+    }
+    // Fallback: return first sheet anyway
     const sheet = wb.Sheets[wb.SheetNames[0]]
-    return XLSX.utils.sheet_to_csv(sheet)
+    return XLSX.utils.sheet_to_csv(sheet, { strip: true }).replace(/^\uFEFF/, '')
   }
-  // TXT / CSV: return as plain text
-  return new TextDecoder('utf-8').decode(buffer)
+  // TXT / CSV: decode respecting BOM
+  const text = new TextDecoder('utf-8').decode(buffer)
+  return text.replace(/^\uFEFF/, '')
 }
 
 function formatBytes(bytes) {
@@ -44,6 +57,7 @@ export default function FileUploader({ onClose, onTableLoaded, setStatusMessage 
   const [files, setFiles] = useState([]) // { file, tableName, status, progress, error, result }
   const [dragging, setDragging] = useState(false)
   const fileInputRef = useRef(null)
+  const folderInputRef = useRef(null)
 
   const addFiles = useCallback((newFiles) => {
     const entries = Array.from(newFiles)
@@ -193,6 +207,30 @@ export default function FileUploader({ onClose, onTableLoaded, setStatusMessage 
             className="hidden"
             onChange={e => addFiles(e.target.files)}
           />
+          <input
+            ref={folderInputRef}
+            type="file"
+            // @ts-ignore
+            webkitdirectory=""
+            multiple
+            accept=".csv,.txt,.xls,.xlsx,.xlsm,.xlsb"
+            className="hidden"
+            onChange={e => addFiles(e.target.files)}
+          />
+          <div className="flex items-center justify-center gap-2 mt-2">
+            <motion.button whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }}
+              onClick={e => { e.stopPropagation(); fileInputRef.current?.click() }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium"
+              style={{ background: 'rgba(0,120,212,0.15)', border: '1px solid rgba(0,120,212,0.3)', color: '#60a5fa' }}>
+              📄 Cargar archivos
+            </motion.button>
+            <motion.button whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }}
+              onClick={e => { e.stopPropagation(); folderInputRef.current?.click() }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium"
+              style={{ background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.3)', color: '#a5b4fc' }}>
+              📁 Cargar carpeta
+            </motion.button>
+          </div>
         </div>
 
         {/* File list */}

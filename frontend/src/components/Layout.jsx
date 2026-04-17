@@ -12,6 +12,7 @@ import CommandBar from './CommandBar'
 import ResultsTable from './ResultsTable'
 import FileUploader from './FileUploader'
 import RightSidebar from './RightSidebar'
+import CrossWizard from './CrossWizard'
 
 const spring = { type: 'spring', stiffness: 300, damping: 30 }
 
@@ -61,6 +62,7 @@ export default function Layout({ user }) {
   const [lastResult, setLastResult] = useState(null)
   const [toasts, setToasts] = useState([])
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [showCrossWizard, setShowCrossWizard] = useState(false)
   const containerRef = useRef(null)
 
   const addToast = useCallback((message, type = 'info', title) => {
@@ -159,10 +161,30 @@ export default function Layout({ user }) {
       setLastResult(final)
       setStatusMessage(parsed.description + ' — ' + result.rowCount.toLocaleString() + ' fila(s) en ' + duration + 's')
       addToast(result.rowCount.toLocaleString() + ' filas · ' + duration + 's', 'success', parsed.description)
+      // If it's a DML op, refresh table metadata
+      if (parsed.isDML) {
+        const { listTables, describeTable } = await import('../lib/duckdb')
+        const names = await listTables()
+        const refreshed = await Promise.all(
+          tables.filter(t => names.includes(t.name)).map(async t => {
+            try {
+              const cols = await describeTable(t.name)
+              const cnt = await executeQuery(`SELECT COUNT(*) AS n FROM "${t.name}"`)
+              return { ...t, columns: cols, rowCount: parseInt(cnt.rows[0]?.n||0,10) }
+            } catch { return t }
+          })
+        )
+        setTables(refreshed)
+        addToast('Tabla actualizada', 'info', parsed.description)
+      }
     } catch (err) {
-      setQueryError('Error de motor: ' + err.message)
+      const msg = err.message || String(err)
+      const friendly = (msg.includes('malloc') || msg.toLowerCase().includes('out of memory') || msg.toLowerCase().includes('oom'))
+        ? `Los archivos son demasiado grandes para procesarlos directamente. Usa el Asistente de Cruce (botón ⋈ en la barra) o limita la consulta con LIMIT.\n\nDetalle: ${msg}`
+        : msg
+      setQueryError('Error de motor: ' + friendly)
       setStatusMessage('Error al procesar.')
-      addToast(err.message, 'error', 'Error de procesamiento')
+      addToast(msg.slice(0,80), 'error', 'Error de procesamiento')
     } finally {
       setIsExecuting(false)
     }
@@ -170,8 +192,7 @@ export default function Layout({ user }) {
 
   const handleCrossViaToolbar = () => {
     if (tables.length < 2) { addToast('Carga al menos 2 archivos para cruzar.', 'info'); return }
-    setShowRightSidebar(true)
-    setInjectedCommand('Cruza ' + tables[0].name + ' con ' + tables[1].name)
+    setShowCrossWizard(true)
   }
   const handleConsolidate = () => {
     if (tables.length < 2) { addToast('Carga al menos 2 archivos para consolidar.', 'info'); return }
@@ -327,6 +348,26 @@ export default function Layout({ user }) {
         <FileUploader onClose={() => setShowUploader(false)}
           onTableLoaded={handleTableLoaded} setStatusMessage={setStatusMessage} />
       )}
+
+      <AnimatePresence>
+        {showCrossWizard && (
+          <CrossWizard
+            tables={tables}
+            onClose={() => setShowCrossWizard(false)}
+            onResult={(res) => {
+              setQueryResult(res)
+              setLastResult(res)
+              setStatusMessage('Cruce ejecutado — ' + res.rowCount.toLocaleString() + ' fila(s)')
+              addToast(res.rowCount.toLocaleString() + ' filas', 'success', 'Cruce completado')
+            }}
+            onTableSaved={(meta) => {
+              handleTableLoaded(meta)
+              setShowCrossWizard(false)
+              addToast(meta.rowCount.toLocaleString() + ' filas guardadas', 'success', '"' + meta.name + '" disponible')
+            }}
+          />
+        )}
+      </AnimatePresence>
 
       <ToastContainer toasts={toasts} onRemove={removeToast} />
     </div>
