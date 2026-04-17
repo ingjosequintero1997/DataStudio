@@ -65,9 +65,9 @@ export default function Toolbar({
       <div
         className="flex items-center justify-between px-4 py-2 shrink-0"
         style={{
-          background: 'linear-gradient(90deg, #0a0e1f 0%, #0d1530 40%, #0a0e1f 100%)',
-          borderBottom: '1px solid rgba(0,120,212,0.2)',
-          boxShadow: '0 1px 0 rgba(0,120,212,0.1)',
+          background: 'linear-gradient(90deg, #1B5E20 0%, #2E7D32 40%, #1B5E20 100%)',
+          borderBottom: '1px solid rgba(0,0,0,0.12)',
+          boxShadow: '0 1px 0 rgba(0,0,0,0.08)',
         }}
       >
         <div className="flex items-center gap-3">
@@ -86,7 +86,7 @@ export default function Toolbar({
 
           <motion.div
             className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-            style={{ background: 'linear-gradient(135deg, #0078d4 0%, #1d4ed8 100%)', boxShadow: '0 0 16px rgba(0,120,212,0.4)' }}
+            style={{ background: 'linear-gradient(135deg, #43A047 0%, #2E7D32 100%)', boxShadow: '0 0 16px rgba(67,160,71,0.5)' }}
             whileHover={{ rotate: 8, scale: 1.08 }}
             transition={spring}
           >
@@ -130,7 +130,7 @@ export default function Toolbar({
       {/* ─── Action toolbar ─── */}
       <div
         className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 shrink-0 overflow-x-auto"
-        style={{ background: 'rgba(8,12,26,0.95)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}
+        style={{ background: '#E8F5E9', borderBottom: '1px solid #C8DCC8' }}
       >
         <PremiumButton onClick={onOpenUploader} disabled={!dbReady}
           gradient="linear-gradient(135deg, #059669 0%, #047857 100%)" glow="rgba(5,150,105,0.35)"

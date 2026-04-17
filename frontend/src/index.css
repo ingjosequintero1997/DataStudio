@@ -14,8 +14,8 @@ html, body, #root {
   height: 100%;
   width: 100%;
   overflow: hidden;
-  background-color: #060913;
-  color: #e2e8f0;
+  background-color: #F4F7F4;
+  color: #1B3318;
   font-family: 'Inter', system-ui, sans-serif;
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
@@ -31,11 +31,11 @@ html, body, #root {
   background: rgba(255,255,255,0.02);
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.1);
+  background: #C8DCC8;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0,120,212,0.5);
+  background: #43A047;
 }
 
 /* Resize handle */
@@ -46,16 +46,16 @@ html, body, #root {
   transition: background 0.2s;
 }
 .resize-handle-x:hover, .resize-handle-x.dragging {
-  background: rgba(0,120,212,0.6);
+  background: #43A047;
 }
 .resize-handle-y {
   cursor: row-resize;
   height: 4px;
-  background: rgba(255,255,255,0.04);
+  background: #C8DCC8;
   transition: background 0.2s;
 }
 .resize-handle-y:hover, .resize-handle-y.dragging {
-  background: #0078d4;
+  background: #2E7D32;
 }
 
 /* Glow animations */

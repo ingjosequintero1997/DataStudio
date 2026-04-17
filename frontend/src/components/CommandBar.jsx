@@ -46,11 +46,11 @@ export default function CommandBar({ onExecute, isExecuting, injectedValue, onCl
   }
 
   return (
-    <div className="flex flex-col h-full" style={{ background: 'rgba(6,9,19,0.5)' }}>
+    <div className="flex flex-col h-full" style={{ background: '#fff', borderRight: '1px solid #C8DCC8' }}>
       {/* Header */}
-      <div className="flex items-center px-5 shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', background: 'rgba(0,0,0,0.2)' }}>
-        <div className="flex items-center gap-2 px-0 py-2.5 border-b-2" style={{ borderColor: '#0078d4' }}>
-          <div className="w-5 h-5 rounded flex items-center justify-center" style={{ background: 'rgba(0,120,212,0.2)' }}>
+      <div className="flex items-center px-5 shrink-0" style={{ borderBottom: '1px solid #C8DCC8', background: '#E8F5E9' }}>
+          <div className="flex items-center gap-2 px-0 py-2.5 border-b-2" style={{ borderColor: '#2E7D32' }}>
+            <div className="w-5 h-5 rounded flex items-center justify-center" style={{ background: '#E8F5E9' }}>
             <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" style={{ color: '#60a5fa' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
             </svg>
@@ -81,7 +81,7 @@ export default function CommandBar({ onExecute, isExecuting, injectedValue, onCl
         {/* Textarea */}
         <div className="relative flex-1">
           <motion.div
-            animate={{ boxShadow: focused ? '0 0 0 1px rgba(0,120,212,0.5), 0 0 20px rgba(0,120,212,0.08)' : '0 0 0 1px rgba(255,255,255,0.07)' }}
+            animate={{ boxShadow: focused ? '0 0 0 2px rgba(67,160,71,0.5), 0 0 20px rgba(67,160,71,0.08)' : '0 0 0 1px #C8DCC8' }}
             transition={{ duration: 0.2 }}
             className="rounded-xl overflow-hidden h-full"
           >
@@ -96,14 +96,14 @@ export default function CommandBar({ onExecute, isExecuting, injectedValue, onCl
               placeholder={PLACEHOLDER_CYCLE[phIdx]}
               className="w-full h-full min-h-[80px] resize-none focus:outline-none disabled:opacity-50 transition-all leading-loose"
               style={{
-                background: 'rgba(8,10,22,0.8)',
-                color: '#e2e8f0',
+                background: '#FAFCFA',
+                color: '#1B3318',
                 fontSize: '0.9rem',
                 fontFamily: 'Inter, sans-serif',
                 fontWeight: 400,
                 letterSpacing: '0.01em',
                 padding: '14px 16px',
-                caretColor: '#60a5fa',
+                caretColor: '#43A047',
               }}
             />
           </motion.div>
@@ -115,7 +115,7 @@ export default function CommandBar({ onExecute, isExecuting, injectedValue, onCl
                 <motion.span key={phIdx}
                   initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}
                   transition={{ duration: 0.3 }}
-                  style={{ color: '#334155', fontSize: '0.88rem', fontFamily: 'Inter, sans-serif', fontStyle: 'italic', lineHeight: 1.6 }}
+                  style={{ color: '#9EBB9E', fontSize: '0.88rem', fontFamily: 'Inter, sans-serif', fontStyle: 'italic', lineHeight: 1.6 }}
                 >
                   {PLACEHOLDER_CYCLE[phIdx]}
                 </motion.span>
@@ -127,14 +127,14 @@ export default function CommandBar({ onExecute, isExecuting, injectedValue, onCl
           {showSuggestions && filtered.length > 0 && (
             <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}
               className="absolute left-0 right-0 top-full mt-1 rounded-xl z-20 overflow-hidden"
-              style={{ background: 'rgba(10,14,28,0.98)', backdropFilter: 'blur(20px)', border: '1px solid rgba(255,255,255,0.08)', boxShadow: '0 16px 40px rgba(0,0,0,0.6)' }}>
+              style={{ background: '#fff', backdropFilter: 'blur(10px)', border: '1px solid #C8DCC8', boxShadow: '0 8px 24px rgba(0,0,0,0.1)' }}>
               {filtered.map((cmd, i) => (
-                <motion.button key={i} whileHover={{ backgroundColor: 'rgba(0,120,212,0.12)' }}
+                <motion.button key={i} whileHover={{ backgroundColor: '#E8F5E9' }}
                   onMouseDown={() => { setValue(cmd); setShowSuggestions(false); textareaRef.current?.focus() }}
                   className="w-full text-left px-4 py-2.5 flex items-center gap-3 transition-colors"
                   style={{ borderBottom: i < filtered.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
-                  <span style={{ color: '#0078d4', fontSize: '0.7rem', fontFamily: 'JetBrains Mono, monospace' }}>▸</span>
-                  <span style={{ color: '#cbd5e1', fontSize: '0.78rem', fontFamily: 'Inter, sans-serif' }}>{cmd}</span>
+                  <span style={{ color: '#43A047', fontSize: '0.7rem', fontFamily: 'JetBrains Mono, monospace' }}>▸</span>
+                  <span style={{ color: '#1B3318', fontSize: '0.78rem', fontFamily: 'Inter, sans-serif' }}>{cmd}</span>
                 </motion.button>
               ))}
             </motion.div>
@@ -151,7 +151,7 @@ export default function CommandBar({ onExecute, isExecuting, injectedValue, onCl
               <motion.button key={i} whileHover={{ scale: 1.04, borderColor: 'rgba(0,120,212,0.5)' }} whileTap={{ scale: 0.96 }} transition={spring}
                 onClick={() => { setValue(cmd); textareaRef.current?.focus() }}
                 className="rounded-full truncate max-w-[200px]"
-                style={{ padding: '2px 10px', border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.03)', color: '#64748b', fontSize: '0.7rem', fontFamily: 'Inter, sans-serif' }}>
+                style={{ padding: '2px 10px', border: '1px solid #C8DCC8', background: '#E8F5E9', color: '#4A6B4A', fontSize: '0.7rem', fontFamily: 'Inter, sans-serif' }}>
                 {cmd}
               </motion.button>
             ))}
@@ -162,7 +162,7 @@ export default function CommandBar({ onExecute, isExecuting, injectedValue, onCl
             whileTap={{ scale: 0.96 }}
             transition={spring}
             className="flex items-center gap-2 rounded-xl disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-            style={{ padding: '8px 20px', background: 'linear-gradient(135deg, #0078d4, #1d4ed8)', boxShadow: '0 4px 16px rgba(0,120,212,0.3)', color: '#fff', fontSize: '0.8rem', fontFamily: 'Inter, sans-serif', fontWeight: 600, letterSpacing: '0.02em' }}
+            style={{ padding: '8px 20px', background: 'linear-gradient(135deg, #43A047, #2E7D32)', boxShadow: '0 4px 16px rgba(67,160,71,0.3)', color: '#fff', fontSize: '0.8rem', fontFamily: 'Inter, sans-serif', fontWeight: 600, letterSpacing: '0.02em' }}
           >
             {isExecuting ? (
               <>

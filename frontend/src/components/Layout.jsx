@@ -239,7 +239,7 @@ export default function Layout({ user }) {
   }, [])
 
   return (
-    <div className="flex flex-col h-full select-none" style={{ background: 'radial-gradient(ellipse 140% 60% at 50% -5%, #0d1b3e 0%, #060913 60%, #030508 100%)' }}>
+    <div className="flex flex-col h-full select-none" style={{ background: '#F4F7F4' }}>
       <Toolbar
         user={user}
         onExport={handleExportCSV}
@@ -257,7 +257,7 @@ export default function Layout({ user }) {
       {/* Status bar */}
       <motion.div layout
         className="flex items-center px-4 py-1 text-[11px] shrink-0 gap-2 font-medium"
-        style={{ background: 'rgba(0,78,160,0.5)', borderBottom: '1px solid rgba(0,120,212,0.15)', color: '#93c5fd' }}>
+        style={{ background: '#2E7D32', borderBottom: '1px solid #1B5E20', color: 'rgba(255,255,255,0.85)' }}>
         <motion.span key={statusMessage} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} className="truncate">
           {statusMessage}
         </motion.span>
@@ -314,7 +314,35 @@ export default function Layout({ user }) {
               <SkeletonTable />
             ) : (
               <ResultsTable result={queryResult} error={queryError} isExecuting={isExecuting}
-                visibleColumns={visibleCols?.length ? visibleCols : undefined} />
+                visibleColumns={visibleCols?.length ? visibleCols : undefined}
+                onExport={() => handleExportCSV()}
+                onSave={queryResult?.crossContext ? () => {
+                  const ctx = queryResult.crossContext
+                  const name = `cruce_${ctx.leftTable}_${ctx.rightTable}`.replace(/[^a-zA-Z0-9_]/g, '_')
+                  import('../lib/duckdb').then(({ registerCSVAsTable }) => {
+                    const header = queryResult.columns.join(',')
+                    const dataRows = queryResult.rows.map(row =>
+                      queryResult.columns.map(col => {
+                        const v = row[col]
+                        if (v === null || v === undefined) return ''
+                        const s = String(v)
+                        return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g,'""')}"` : s
+                      }).join(',')
+                    ).join('\n')
+                    const csv = header + '\n' + dataRows
+                    const buffer = new TextEncoder().encode(csv).buffer
+                    registerCSVAsTable(name, buffer).then(cols => {
+                      import('../lib/indexeddb').then(({ saveTable }) => {
+                        const meta = { name, rowCount: queryResult.rowCount, columns: cols }
+                        saveTable(meta, buffer.slice(0)).then(() => {
+                          handleTableLoaded(meta)
+                          addToast(queryResult.rowCount.toLocaleString() + ' filas guardadas', 'success', '"' + name + '" disponible')
+                        })
+                      })
+                    }).catch(e => addToast('No se pudo guardar: ' + e.message, 'error'))
+                  })
+                } : undefined}
+              />
             )}
           </div>
         </div>
@@ -359,11 +387,6 @@ export default function Layout({ user }) {
               setLastResult(res)
               setStatusMessage('Cruce ejecutado — ' + res.rowCount.toLocaleString() + ' fila(s)')
               addToast(res.rowCount.toLocaleString() + ' filas', 'success', 'Cruce completado')
-            }}
-            onTableSaved={(meta) => {
-              handleTableLoaded(meta)
-              setShowCrossWizard(false)
-              addToast(meta.rowCount.toLocaleString() + ' filas guardadas', 'success', '"' + meta.name + '" disponible')
             }}
           />
         )}

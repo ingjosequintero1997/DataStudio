@@ -23,16 +23,16 @@ export default function ObjectExplorer({ tables, onInsertCommand, onDeleteTable,
   const [tooltip, setTooltip] = useState(null)
 
   return (
-    <div className="flex flex-col h-full relative" style={{ background: 'rgba(6,9,19,0.6)', backdropFilter: 'blur(12px)' }}>
+    <div className="flex flex-col h-full relative" style={{ background: '#F4F7F4', borderRight: '1px solid #C8DCC8' }}>
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2.5 shrink-0"
-        style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-        <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: '#4a90d9', letterSpacing: '0.12em' }}>
+        style={{ borderBottom: '1px solid #C8DCC8', background: '#E8F5E9' }}>
+        <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: '#2E7D32', letterSpacing: '0.12em' }}>
           Archivos Cargados
         </span>
         <motion.button onClick={onOpenUploader} title="Cargar nuevo archivo" whileHover={{ scale: 1.12 }} whileTap={{ scale: 0.9 }} transition={spring}
           className="w-6 h-6 rounded-lg flex items-center justify-center"
-          style={{ background: 'linear-gradient(135deg, #059669, #047857)', boxShadow: '0 2px 8px rgba(5,150,105,0.3)' }}>
+          style={{ background: 'linear-gradient(135deg, #43A047, #2E7D32)', boxShadow: '0 2px 8px rgba(67,160,71,0.3)' }}>
           <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
           </svg>
@@ -61,7 +61,7 @@ export default function ObjectExplorer({ tables, onInsertCommand, onDeleteTable,
               </div>
               <motion.button onClick={onOpenUploader} whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.95 }} transition={spring}
                 className="px-4 py-2 text-xs font-semibold rounded-lg text-white"
-                style={{ background: 'linear-gradient(135deg, #059669, #047857)', boxShadow: '0 4px 16px rgba(5,150,105,0.3)' }}>
+                style={{ background: 'linear-gradient(135deg, #43A047, #2E7D32)', boxShadow: '0 4px 16px rgba(67,160,71,0.3)' }}>
                 + Cargar primer archivo
               </motion.button>
             </motion.div>
@@ -78,19 +78,19 @@ export default function ObjectExplorer({ tables, onInsertCommand, onDeleteTable,
                   onMouseLeave={() => setTooltip(null)}
                   className="group relative rounded-xl cursor-pointer p-3"
                   style={isSelected
-                    ? { border: '1px solid rgba(0,120,212,0.5)', background: 'rgba(0,120,212,0.08)', boxShadow: '0 0 20px rgba(0,120,212,0.12)' }
-                    : { border: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)' }}
-                  whileHover={isSelected ? {} : { borderColor: 'rgba(0,120,212,0.3)', backgroundColor: 'rgba(0,120,212,0.04)' }}
+                    ? { border: '1px solid #43A047', background: '#E8F5E9', boxShadow: '0 0 16px rgba(67,160,71,0.15)' }
+                    : { border: '1px solid #C8DCC8', background: '#fff' }}
+                  whileHover={isSelected ? {} : { borderColor: '#43A047', backgroundColor: '#F1FAF1' }}
                 >
                   <div className="flex items-start justify-between gap-1">
                     <div className="flex items-center gap-2 min-w-0">
                       <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
-                        style={{ background: 'rgba(0,120,212,0.15)' }}>
-                        <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" style={{ color: '#3b82f6' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        style={{ background: '#E8F5E9' }}>
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" style={{ color: '#43A047' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
                         </svg>
                       </div>
-                      <span className="text-xs font-semibold truncate" style={{ color: '#e2e8f0' }}>{table.name}</span>
+                      <span className="text-xs font-semibold truncate" style={{ color: '#1B3318' }}>{table.name}</span>
                     </div>
                     <motion.button onClick={e => { e.stopPropagation(); onDeleteTable(table.name) }}
                       whileHover={{ scale: 1.2 }} whileTap={{ scale: 0.85 }} transition={spring}
@@ -119,9 +119,9 @@ export default function ObjectExplorer({ tables, onInsertCommand, onDeleteTable,
 
                   <div className="hidden group-hover:flex gap-1 mt-2">
                     {[
-                      { label: 'Ver', cmd: `Muéstrame los primeros registros de ${table.name}`, color: 'rgba(0,120,212,0.2)', hover: 'rgba(0,120,212,0.4)', text: '#93c5fd' },
-                      { label: 'Columnas', cmd: `Muéstrame las columnas de ${table.name}`, color: 'rgba(255,255,255,0.05)', hover: 'rgba(255,255,255,0.1)', text: '#94a3b8' },
-                      { label: 'Contar', cmd: `Cuántos registros tiene ${table.name}`, color: 'rgba(255,255,255,0.05)', hover: 'rgba(255,255,255,0.1)', text: '#94a3b8' },
+                      { label: 'Ver', cmd: `Muéstrame los primeros registros de ${table.name}`, color: '#E8F5E9', hover: '#C8DCC8', text: '#2E7D32' },
+                      { label: 'Columnas', cmd: `Muéstrame las columnas de ${table.name}`, color: '#F4F7F4', hover: '#E8F5E9', text: '#4A6B4A' },
+                      { label: 'Contar', cmd: `Cuántos registros tiene ${table.name}`, color: '#F4F7F4', hover: '#E8F5E9', text: '#4A6B4A' },
                     ].map(btn => (
                       <motion.button key={btn.label}
                         onClick={e => { e.stopPropagation(); onInsertCommand?.(btn.cmd) }}
@@ -141,7 +141,7 @@ export default function ObjectExplorer({ tables, onInsertCommand, onDeleteTable,
 
       {/* Footer credits */}
       <div className="px-4 py-2.5 shrink-0" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
-        <p className="text-[9px] font-medium tracking-wide" style={{ color: '#475569' }}>Desarrollado por el Ing. José Quintero</p>
+        <p className="text-[9px] font-medium tracking-wide" style={{ color: '#9EBB9E' }}>Desarrollado por el Ing. José Quintero</p>
       </div>
 
       {/* Tooltip */}
