@@ -31,7 +31,7 @@ const AGG_LABELS = {
 }
 
 /* ─ Banner que resume el cruce ejecutado ─────────────────────────────── */
-function CrossBanner({ ctx, onExport, onSave }) {
+function CrossBanner({ ctx, onExport, onExportExcel }) {
   if (!ctx) return null
   return (
     <div style={{ background: G.light, borderBottom: `1px solid ${G.border}`, padding: '10px 16px', flexShrink: 0 }}>
@@ -53,12 +53,10 @@ function CrossBanner({ ctx, onExport, onSave }) {
             style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 12px', borderRadius: 7, border: `1px solid ${G.primary}`, background: '#fff', color: G.dark, fontFamily: 'Inter,sans-serif', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer' }}>
             ⬇ Exportar CSV
           </button>
-          {onSave && (
-            <button onClick={onSave}
-              style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 12px', borderRadius: 7, border: 'none', background: G.primary, color: '#fff', fontFamily: 'Inter,sans-serif', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer' }}>
-              💾 Guardar como tabla
-            </button>
-          )}
+          <button onClick={onExportExcel}
+            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 12px', borderRadius: 7, border: `1px solid ${G.primary}`, background: '#fff', color: G.dark, fontFamily: 'Inter,sans-serif', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer' }}>
+            ⬇ Exportar Excel
+          </button>
         </div>
       </div>
       {/* Detalles */}
@@ -103,7 +101,7 @@ function CellValue({ value }) {
   return <span className="truncate">{str}</span>
 }
 
-export default function ResultsTable({ result, error, isExecuting, visibleColumns, onExport, onSave }) {
+export default function ResultsTable({ result, error, isExecuting, visibleColumns, onExport, onExportExcel }) {
   const displayColumns = visibleColumns?.length ? visibleColumns : (result?.columns || [])
 
   const colWidths = useMemo(() => {
@@ -204,7 +202,7 @@ export default function ResultsTable({ result, error, isExecuting, visibleColumn
   return (
     <div className="flex flex-col h-full" style={{ background: '#fff' }}>
       <TabBar rowCount={rowCount} duration={duration} hasCross={!!crossContext} />
-      <CrossBanner ctx={crossContext} onExport={onExport} onSave={onSave} />
+      <CrossBanner ctx={crossContext} onExport={onExport} onExportExcel={onExportExcel} />
       <div className="flex-1 overflow-hidden">
         <AutoSizer>
           {({ width, height }) => {

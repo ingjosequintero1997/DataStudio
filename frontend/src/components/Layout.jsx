@@ -132,6 +132,22 @@ export default function Layout({ user }) {
     addToast(res.rowCount.toLocaleString() + ' filas exportadas', 'success', 'CSV generado')
   }, [queryResult, lastResult])
 
+  const handleExportExcel = useCallback((resOverride) => {
+    const res = resOverride || lastResult || queryResult
+    if (!res?.rows?.length) { setStatusMessage('No hay resultados para exportar.'); return }
+    import('xlsx').then(XLSX => {
+      const ws = XLSX.utils.json_to_sheet(res.rows.map(row => {
+        const obj = {}
+        res.columns.forEach(col => { obj[col] = row[col] ?? '' })
+        return obj
+      }))
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'Resultado')
+      XLSX.writeFile(wb, 'resultado_' + Date.now() + '.xlsx')
+      addToast(res.rowCount.toLocaleString() + ' filas exportadas', 'success', 'Excel generado')
+    })
+  }, [queryResult, lastResult])
+
   const handleExecuteCommand = useCallback(async (input) => {
     setIsExecuting(true)
     setQueryError(null)
@@ -258,11 +274,14 @@ export default function Layout({ user }) {
       <motion.div layout
         className="flex items-center px-4 py-1 text-[11px] shrink-0 gap-2 font-medium"
         style={{ background: '#2E7D32', borderBottom: '1px solid #1B5E20', color: 'rgba(255,255,255,0.85)' }}>
-        <motion.span key={statusMessage} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} className="truncate">
+        <motion.span key={statusMessage} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} className="truncate flex-1">
           {statusMessage}
         </motion.span>
         {isExecuting && <motion.span animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 0.8, ease: 'linear' }}
           className="w-3 h-3 border border-blue-300 border-t-transparent rounded-full shrink-0 inline-block" />}
+        <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: '0.68rem', letterSpacing: '0.02em', whiteSpace: 'nowrap' }}>
+          Ing. José Quintero
+        </span>
       </motion.div>
 
       <div className="flex flex-1 overflow-hidden relative">
@@ -316,32 +335,7 @@ export default function Layout({ user }) {
               <ResultsTable result={queryResult} error={queryError} isExecuting={isExecuting}
                 visibleColumns={visibleCols?.length ? visibleCols : undefined}
                 onExport={() => handleExportCSV()}
-                onSave={queryResult?.crossContext ? () => {
-                  const ctx = queryResult.crossContext
-                  const name = `cruce_${ctx.leftTable}_${ctx.rightTable}`.replace(/[^a-zA-Z0-9_]/g, '_')
-                  import('../lib/duckdb').then(({ registerCSVAsTable }) => {
-                    const header = queryResult.columns.join(',')
-                    const dataRows = queryResult.rows.map(row =>
-                      queryResult.columns.map(col => {
-                        const v = row[col]
-                        if (v === null || v === undefined) return ''
-                        const s = String(v)
-                        return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g,'""')}"` : s
-                      }).join(',')
-                    ).join('\n')
-                    const csv = header + '\n' + dataRows
-                    const buffer = new TextEncoder().encode(csv).buffer
-                    registerCSVAsTable(name, buffer).then(cols => {
-                      import('../lib/indexeddb').then(({ saveTable }) => {
-                        const meta = { name, rowCount: queryResult.rowCount, columns: cols }
-                        saveTable(meta, buffer.slice(0)).then(() => {
-                          handleTableLoaded(meta)
-                          addToast(queryResult.rowCount.toLocaleString() + ' filas guardadas', 'success', '"' + name + '" disponible')
-                        })
-                      })
-                    }).catch(e => addToast('No se pudo guardar: ' + e.message, 'error'))
-                  })
-                } : undefined}
+                onExportExcel={() => handleExportExcel()}
               />
             )}
           </div>

@@ -211,9 +211,14 @@ export default function Login() {
               </AnimatePresence>
             </motion.button>
           </form>
-          <p style={{ textAlign: 'center', fontFamily: 'Inter, sans-serif', fontSize: '0.72rem', color: '#9EBB9E', marginTop: 20 }}>
-            Desarrollado por el <span style={{ color: '#2E7D32', fontWeight: 600 }}>Ing. Jose Quintero</span>
-          </p>
+          <div style={{ textAlign: 'center', marginTop: 20, padding: '12px 0 2px', borderTop: '1px solid #E8F5E9' }}>
+            <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.75rem', color: '#4A6B4A', margin: 0 }}>
+              Desarrollado por
+            </p>
+            <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.82rem', fontWeight: 700, color: '#2E7D32', margin: '2px 0 0', letterSpacing: '0.01em' }}>
+              Ing. Jos&eacute; Quintero
+            </p>
+          </div>
         </div>
       </motion.div>
     </div>
