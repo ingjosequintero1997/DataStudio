@@ -242,53 +242,6 @@ export default function CrossWizard({ tables, onClose, onResult }) {
             </div>
           </Section>
 
-          {/* 5 · Qué hacer con el resultado */}
-          <Section num="5" title="¿Qué hacer con el resultado del cruce?">
-            <div className="grid grid-cols-1 gap-2">
-              {[
-                { key: 'only_result', title: 'Solo mostrar resultado', desc: 'Mostrar en panel de resultados sin guardar cambios' },
-                { key: 'replace_main', title: 'Actualizar archivo principal', desc: 'Reemplazar el archivo seleccionado con el resultado del cruce' },
-                { key: 'new_tab', title: 'Agregar en pestaña nueva', desc: 'Crear una tabla nueva dentro del proyecto actual' },
-                { key: 'new_file', title: 'Crear archivo diferente', desc: 'Crear una tabla diferente para trabajar por separado' },
-              ].map(opt => {
-                const sel = postAction === opt.key
-                return (
-                  <motion.button
-                    key={opt.key}
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.98 }}
-                    onClick={() => setPostAction(opt.key)}
-                    className="text-left px-3 py-2.5 rounded-lg text-xs transition-all"
-                    style={sel ? cardActive : cardIdle}
-                  >
-                    <div className="font-bold" style={{ color: sel ? G.dark : G.text }}>{opt.title}</div>
-                    <div style={{ color: G.dim }} className="mt-0.5">{opt.desc}</div>
-                  </motion.button>
-                )
-              })}
-            </div>
-            {postAction === 'replace_main' && (
-              <div className="mt-3">
-                <p className="text-[10px] mb-1.5 font-semibold" style={{ color: G.dim }}>Archivo principal a actualizar</p>
-                <select value={targetTable} onChange={e => setTargetTable(e.target.value)} style={selectSt}>
-                  <option value="">— Selecciona archivo —</option>
-                  {tables.map(t => <option key={t.name} value={t.name}>{t.name}</option>)}
-                </select>
-              </div>
-            )}
-            {(postAction === 'new_tab' || postAction === 'new_file') && (
-              <div className="mt-3">
-                <p className="text-[10px] mb-1.5 font-semibold" style={{ color: G.dim }}>Nombre de la nueva tabla</p>
-                <input
-                  value={newTableName}
-                  onChange={e => setNewTableName(e.target.value)}
-                  placeholder="resultado_cruce"
-                  style={selectSt}
-                />
-              </div>
-            )}
-          </Section>
-
           {/* 2 · Columnas */}
           <Section num="2" title="Columna de enlace">
             <div className="grid grid-cols-2 gap-3">
@@ -370,6 +323,53 @@ export default function CrossWizard({ tables, onClose, onResult }) {
                 </motion.div>
               )}
             </AnimatePresence>
+          </Section>
+
+          {/* 5 · Qué hacer con el resultado */}
+          <Section num="5" title="¿Qué hacer con el resultado del cruce?">
+            <div className="grid grid-cols-1 gap-2">
+              {[
+                { key: 'only_result', title: 'Solo mostrar resultado', desc: 'Mostrar en panel de resultados sin guardar cambios' },
+                { key: 'replace_main', title: 'Actualizar archivo principal', desc: 'Reemplazar el archivo seleccionado con el resultado del cruce' },
+                { key: 'new_tab', title: 'Agregar en pestaña nueva', desc: 'Crear una tabla nueva dentro del proyecto actual' },
+                { key: 'new_file', title: 'Crear archivo diferente', desc: 'Crear una tabla diferente para trabajar por separado' },
+              ].map(opt => {
+                const sel = postAction === opt.key
+                return (
+                  <motion.button
+                    key={opt.key}
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => setPostAction(opt.key)}
+                    className="text-left px-3 py-2.5 rounded-lg text-xs transition-all"
+                    style={sel ? cardActive : cardIdle}
+                  >
+                    <div className="font-bold" style={{ color: sel ? G.dark : G.text }}>{opt.title}</div>
+                    <div style={{ color: G.dim }} className="mt-0.5">{opt.desc}</div>
+                  </motion.button>
+                )
+              })}
+            </div>
+            {postAction === 'replace_main' && (
+              <div className="mt-3">
+                <p className="text-[10px] mb-1.5 font-semibold" style={{ color: G.dim }}>Archivo principal a actualizar</p>
+                <select value={targetTable} onChange={e => setTargetTable(e.target.value)} style={selectSt}>
+                  <option value="">— Selecciona archivo —</option>
+                  {tables.map(t => <option key={t.name} value={t.name}>{t.name}</option>)}
+                </select>
+              </div>
+            )}
+            {(postAction === 'new_tab' || postAction === 'new_file') && (
+              <div className="mt-3">
+                <p className="text-[10px] mb-1.5 font-semibold" style={{ color: G.dim }}>Nombre de la nueva tabla</p>
+                <input
+                  value={newTableName}
+                  onChange={e => setNewTableName(e.target.value)}
+                  placeholder="resultado_cruce"
+                  style={selectSt}
+                />
+              </div>
+            )}
           </Section>
 
           {/* SQL Preview */}
