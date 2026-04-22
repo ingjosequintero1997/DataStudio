@@ -20,11 +20,15 @@ export const DEFAULT_QUERIES = [
   'Muestrame valores unicos de [columna] en [tabla]',
   'Actualiza [tabla] pon [columna] a [valor] donde [columna2] sea [valor2]',
   'Actualiza toda la columna [columna] a [valor] en [tabla]',
+  'Actualiza toda la columna [columna] a NULL en [tabla]',
   'Actualiza masivo [tabla] columna [columna_objetivo] por [columna_clave] con: clave1=>valor1; clave2=>valor2; clave3=>valor3',
+  'Actualiza masivo [tabla] columna [columna_objetivo] por [columna_clave] con: 1=>A; 2=>B; 3=>C; 4=>D',
   'Actualiza masivo clientes columna estado por id con: 1001=>activo; 1002=>inactivo; 1003=>activo',
   'Reemplaza en [tabla] el valor [viejo] por [nuevo] en [columna]',
   'Reemplaza todos los datos de la columna [columna] por [valor] en [tabla]',
+  'Reemplaza en [tabla] el valor [viejo] por [nuevo] en [columna] donde [columna2] sea [valor2]',
   'Vaciar columna [columna] en [tabla]',
+  'Actualizar [tabla] solo filas donde [columna] sea [valor] y poner [columna_objetivo] a [nuevo_valor]',
   'Elimina registros de [tabla] donde [columna] sea [valor]',
   'Elimina registros de [tabla] donde [columna] este en (valor1, valor2, valor3)',
   'Cruza [tablaA] con [tablaB] por [columna_id]',
@@ -71,13 +75,17 @@ export function subscribeKnowledgeBase(onItems, onError) {
 export async function createKnowledgeItem({ text, tags = [], createdBy }) {
   const clean = (text || '').trim()
   if (!clean) throw new Error('La instruccion no puede estar vacia.')
-  await addDoc(collection(db, COLLECTION), {
+  if (!isAdminUser(createdBy)) {
+    throw new Error('Solo el usuario administrador puede crear instrucciones globales.')
+  }
+  const ref = await addDoc(collection(db, COLLECTION), {
     text: clean,
     tags,
     createdBy: createdBy || 'admin',
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   })
+  return ref.id
 }
 
 export async function removeKnowledgeItem(id) {

@@ -384,19 +384,29 @@ export default function Layout({ user }) {
             className="md:hidden fixed left-0 top-0 bottom-0 z-40 flex flex-col"
             style={{ width: 280, paddingTop: 96 }}
           >
-            <ObjectExplorer tables={tables} onInsertCommand={cmd => { setInjectedCommand(cmd); setDrawerOpen(false) }}
-              onDeleteTable={handleDeleteTable} onOpenUploader={() => { setShowUploader(true); setDrawerOpen(false) }}
+            <ObjectExplorer
+              tables={tables}
+              onInsertCommand={cmd => { setInjectedCommand(cmd); setDrawerOpen(false) }}
+              onDeleteTable={handleDeleteTable}
+              onOpenUploader={() => { setShowUploader(true); setDrawerOpen(false) }}
               onDeleteAllTables={handleDeleteAllTables}
-              onSelectTable={n => { setSelectedTable(n); setDrawerOpen(false) }} selectedTable={selectedTable} />
+              onSelectTable={n => { setSelectedTable(n); setDrawerOpen(false) }}
+              selectedTable={selectedTable}
+            />
           </motion.div>
         </AnimatePresence>
 
         {/* Desktop sidebar */}
         <div style={{ width: sidebarWidth }} className="hidden md:flex flex-col shrink-0 overflow-hidden">
-          <ObjectExplorer tables={tables} onInsertCommand={cmd => setInjectedCommand(cmd)}
-            onDeleteTable={handleDeleteTable} onOpenUploader={() => setShowUploader(true)}
+          <ObjectExplorer
+            tables={tables}
+            onInsertCommand={cmd => setInjectedCommand(cmd)}
+            onDeleteTable={handleDeleteTable}
+            onOpenUploader={() => setShowUploader(true)}
             onDeleteAllTables={handleDeleteAllTables}
-            onSelectTable={setSelectedTable} selectedTable={selectedTable} />
+            onSelectTable={setSelectedTable}
+            selectedTable={selectedTable}
+          />
         </div>
 
         <div className="hidden md:block resize-handle-x shrink-0" onMouseDown={onMouseDownLeft} />

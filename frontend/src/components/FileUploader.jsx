@@ -27,21 +27,45 @@ function sanitizeName(filename) {
 async function getUploadBuffer(file) {
   const buffer = await file.arrayBuffer()
   if (isExcel(file.name)) {
-    const wb = XLSX.read(buffer, { type: 'array', cellDates: true, dense: true })
+    let wb
+    try {
+      wb = XLSX.read(buffer, { type: 'array', cellDates: true, dense: true })
+    } catch {
+      const binary = Array.from(new Uint8Array(buffer)).map(b => String.fromCharCode(b)).join('')
+      wb = XLSX.read(binary, { type: 'binary', cellDates: true, dense: true })
+    }
+
+    if (!wb?.SheetNames?.length) {
+      throw new Error('No se encontraron hojas en el archivo XLSX.')
+    }
+
+    const csvFromMatrix = (matrix) => matrix
+      .map(row => (row || []).map(cell => {
+        if (cell === null || cell === undefined) return ''
+        const s = String(cell)
+        return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s
+      }).join(','))
+      .join('\n')
+
     // Try each sheet until one has data
     for (const sheetName of wb.SheetNames) {
       const sheet = wb.Sheets[sheetName]
       if (!sheet['!ref']) continue
-      let csv = XLSX.utils.sheet_to_csv(sheet, { strip: true, blankrows: false })
+      const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' })
+      if (!matrix.length) continue
+      let csv = csvFromMatrix(matrix)
       // Remove BOM if present
       csv = csv.replace(/^\uFEFF/, '')
       // Check the CSV actually has rows with content
-      const lines = csv.split('\n').filter(l => l.trim().replace(/,/g,'') !== '')
+      const lines = csv.split('\n').filter(l => l.trim().replace(/,/g, '') !== '')
       if (lines.length > 1) return new Blob([csv], { type: 'text/csv' }).arrayBuffer()
     }
     // Fallback: return first sheet anyway
     const sheet = wb.Sheets[wb.SheetNames[0]]
-    const csv = XLSX.utils.sheet_to_csv(sheet, { strip: true }).replace(/^\uFEFF/, '')
+    if (!sheet) throw new Error('No se pudo leer la hoja principal del XLSX.')
+    const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' })
+    const csv = csvFromMatrix(matrix).replace(/^\uFEFF/, '')
+    if (!csv.trim()) throw new Error('La hoja del XLSX esta vacia o no tiene datos legibles.')
     return new Blob([csv], { type: 'text/csv' }).arrayBuffer()
   }
   // CSV / TXT: keep original bytes to avoid encoding corruption.

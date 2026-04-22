@@ -37,17 +37,39 @@ export default function KnowledgeBaseModal({ open, onClose, userEmail, onUseComm
     return [...cloud, ...local]
   }, [items, search])
 
+  const QUICK_ADMIN_TEMPLATES = [
+    'Actualiza masivo clientes columna estado por id con: 1001=>activo; 1002=>inactivo; 1003=>activo',
+    'Actualiza toda la columna estado a activo en clientes',
+    'Reemplaza en clientes el valor inactivo por activo en estado',
+    'Vaciar columna observacion en clientes',
+    'Reordena columnas de clientes: id, nombre, ciudad, estado',
+    'Elimina registros de clientes donde estado sea inactivo',
+  ]
+
   async function onAdd() {
     if (!isAdmin) return
     const text = newText.trim()
     if (!text) return
     setLoading(true)
     try {
-      await createKnowledgeItem({
+      const createdId = await createKnowledgeItem({
         text,
         createdBy: userEmail,
         tags: ['admin'],
       })
+      setItems(prev => {
+        const exists = prev.some(i => i.id === createdId || i.text === text)
+        if (exists) return prev
+        return [{
+          id: createdId,
+          text,
+          createdBy: userEmail,
+          tags: ['admin'],
+          createdAtMs: Date.now(),
+          updatedAtMs: Date.now(),
+        }, ...prev]
+      })
+      setSearch('')
       setNewText('')
       addToast?.('Instruccion guardada para todos los usuarios', 'success', 'Base de conocimiento')
     } catch (e) {
@@ -107,30 +129,57 @@ export default function KnowledgeBaseModal({ open, onClose, userEmail, onUseComm
           {error && <p className="text-xs mt-2" style={{ color: '#B91C1C' }}>{error}</p>}
         </div>
 
-        {isAdmin && (
-          <div className="p-4 border-b" style={{ borderColor: '#C8DCC8', background: '#fff' }}>
+        <div className="p-4 border-b" style={{ borderColor: '#C8DCC8', background: '#fff' }}>
+          <div className="flex items-center justify-between gap-2">
             <label className="text-[11px] font-semibold" style={{ color: '#4A6B4A' }}>
               Nueva instruccion global (solo admin)
             </label>
-            <div className="flex gap-2 mt-2">
-              <input
-                value={newText}
-                onChange={(e) => setNewText(e.target.value)}
-                placeholder="Ej: Actualiza clientes pon estado a activo donde ciudad sea Valledupar"
-                className="flex-1 px-3 py-2 rounded-lg text-sm"
-                style={{ border: '1px solid #C8DCC8', background: '#FAFCFA', color: '#1B3318' }}
-              />
-              <button
-                onClick={onAdd}
-                disabled={loading || !newText.trim()}
-                className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50"
-                style={{ background: 'linear-gradient(135deg, #43A047, #2E7D32)' }}
-              >
-                Guardar
-              </button>
-            </div>
+            <span className="text-[10px] px-2 py-1 rounded-full" style={{
+              background: isAdmin ? '#E8F5E9' : '#F3F4F6',
+              color: isAdmin ? '#2E7D32' : '#6B7280',
+              border: `1px solid ${isAdmin ? '#C8DCC8' : '#D1D5DB'}`,
+            }}>
+              {isAdmin ? 'Modo admin habilitado' : 'Modo admin deshabilitado'}
+            </span>
           </div>
-        )}
+          <div className="flex gap-2 mt-2">
+            <input
+              value={newText}
+              onChange={(e) => setNewText(e.target.value)}
+              placeholder="Ej: Actualiza masivo clientes columna estado por id con: 1001=>activo; 1002=>inactivo"
+              disabled={!isAdmin}
+              className="flex-1 px-3 py-2 rounded-lg text-sm disabled:opacity-60"
+              style={{ border: '1px solid #C8DCC8', background: '#FAFCFA', color: '#1B3318' }}
+            />
+            <button
+              onClick={onAdd}
+              disabled={!isAdmin || loading || !newText.trim()}
+              className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50"
+              style={{ background: 'linear-gradient(135deg, #43A047, #2E7D32)' }}
+            >
+              Guardar
+            </button>
+          </div>
+          {!isAdmin && (
+            <p className="text-[10px] mt-2" style={{ color: '#9EBB9E' }}>
+              Solo el administrador (joserodolquinbo1997@gmail.com) puede crear o eliminar instrucciones. Los demas usuarios pueden usarlas.
+            </p>
+          )}
+          {isAdmin && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {QUICK_ADMIN_TEMPLATES.map((tpl) => (
+                <button
+                  key={tpl}
+                  onClick={() => setNewText(tpl)}
+                  className="px-2 py-1 rounded text-[10px]"
+                  style={{ background: '#E8F5E9', color: '#2E7D32', border: '1px solid #C8DCC8' }}
+                >
+                  Plantilla
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         <div className="p-4 overflow-y-auto flex-1 grid grid-cols-1 md:grid-cols-2 gap-2">
           <AnimatePresence>
