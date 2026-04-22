@@ -2,6 +2,7 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth'
 import { auth } from '../firebase'
+import { ADMIN_EMAIL } from '../lib/knowledgeBase'
 
 const spring = { type: 'spring', stiffness: 420, damping: 30 }
 const AUTH_ERRORS = {
@@ -74,6 +75,8 @@ export default function Login() {
   const [loading, setLoading] = useState(false)
   const [showPass, setShowPass] = useState(false)
   const [success, setSuccess] = useState(false)
+  const normalizedEmail = email.toLowerCase().trim()
+  const canRegister = normalizedEmail === ADMIN_EMAIL
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -81,13 +84,20 @@ export default function Login() {
     setLoading(true)
     try {
       if (isRegister) {
+        if (!canRegister) {
+          throw new Error('only-admin-register')
+        }
         await createUserWithEmailAndPassword(auth, email, password)
       } else {
         await signInWithEmailAndPassword(auth, email, password)
       }
       setSuccess(true)
     } catch (err) {
-      setError(AUTH_ERRORS[err.code] || 'Ocurrio un error inesperado.')
+      if (err.message === 'only-admin-register') {
+        setError(`Solo el administrador (${ADMIN_EMAIL}) puede registrarse.`)
+      } else {
+        setError(AUTH_ERRORS[err.code] || 'Ocurrio un error inesperado.')
+      }
     } finally {
       setLoading(false)
     }
@@ -134,19 +144,30 @@ export default function Login() {
           <div style={{ display: 'flex', borderRadius: 10, padding: 4, marginBottom: 24, background: '#F4F7F4', border: '1px solid #C8DCC8', gap: 4 }}>
             {['Iniciar sesion', 'Registrarse'].map((label, i) => {
               const active = (i === 1) === isRegister
+              const isRegisterTab = i === 1
+              const disabled = isRegisterTab && !canRegister
               return (
-                <motion.button key={label} onClick={() => { setIsRegister(i === 1); setError('') }}
+                <motion.button key={label} onClick={() => { if (!disabled) { setIsRegister(i === 1); setError('') } }}
+                  disabled={disabled}
                   whileTap={{ scale: 0.97 }} transition={spring}
-                  style={{ flex: 1, padding: '7px 0', borderRadius: 8, border: 'none', cursor: 'pointer', fontFamily: 'Inter, sans-serif', fontSize: '0.78rem', fontWeight: 600, transition: 'all 0.18s',
+                  style={{ flex: 1, padding: '7px 0', borderRadius: 8, border: 'none', fontFamily: 'Inter, sans-serif', fontSize: '0.78rem', fontWeight: 600, transition: 'all 0.18s',
                     background: active ? 'linear-gradient(135deg, #43A047, #2E7D32)' : 'transparent',
                     color: active ? '#fff' : '#4A6B4A',
                     boxShadow: active ? '0 2px 12px rgba(67,160,71,0.35)' : 'none',
+                    opacity: disabled ? 0.5 : 1,
+                    cursor: disabled ? 'not-allowed' : 'pointer',
                   }}>
                   {label}
                 </motion.button>
               )
             })}
           </div>
+
+          {!canRegister && (
+            <p style={{ margin: '-12px 0 16px', fontFamily: 'Inter, sans-serif', fontSize: '0.72rem', color: '#6B7280' }}>
+              Registro deshabilitado para este correo. Solo {ADMIN_EMAIL} puede crear cuenta.
+            </p>
+          )}
 
           <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <InputField label="Correo electronico" type="email" value={email} onChange={e => setEmail(e.target.value)}

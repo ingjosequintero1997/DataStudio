@@ -6,6 +6,7 @@ import {
   isAdminUser,
   removeKnowledgeItem,
   subscribeKnowledgeBase,
+  updateKnowledgeItem,
 } from '../../lib/knowledgeBase'
 
 const spring = { type: 'spring', stiffness: 360, damping: 28 }
@@ -14,7 +15,10 @@ export default function KnowledgeBaseModal({ open, onClose, userEmail, onUseComm
   const [items, setItems] = useState([])
   const [search, setSearch] = useState('')
   const [newText, setNewText] = useState('')
+  const [editingId, setEditingId] = useState('')
+  const [editingText, setEditingText] = useState('')
   const [loading, setLoading] = useState(false)
+  const [savingEditId, setSavingEditId] = useState('')
   const [error, setError] = useState('')
 
   const isAdmin = isAdminUser(userEmail)
@@ -70,10 +74,51 @@ export default function KnowledgeBaseModal({ open, onClose, userEmail, onUseComm
     }
   }
 
+  function onEditStart(item) {
+    if (!isAdmin) return
+    if (item.id.startsWith('default-')) return
+    setEditingId(item.id)
+    setEditingText(item.text || '')
+  }
+
+  function onEditCancel() {
+    setEditingId('')
+    setEditingText('')
+  }
+
+  async function onEditSave(item) {
+    if (!isAdmin || item.id.startsWith('default-')) return
+    const text = editingText.trim()
+    if (!text) {
+      addToast?.('La instruccion no puede estar vacia', 'error', 'Base de conocimiento')
+      return
+    }
+    setSavingEditId(item.id)
+    try {
+      await updateKnowledgeItem({
+        id: item.id,
+        text,
+        tags: item.tags,
+        updatedBy: userEmail,
+      })
+      setItems(prev => prev.map(it => (
+        it.id === item.id
+          ? { ...it, text, updatedAtMs: Date.now() }
+          : it
+      )))
+      onEditCancel()
+      addToast?.('Instruccion actualizada', 'success', 'Base de conocimiento')
+    } catch (e) {
+      addToast?.(e.message || 'No se pudo actualizar', 'error', 'Base de conocimiento')
+    } finally {
+      setSavingEditId('')
+    }
+  }
+
   async function onDelete(id) {
     if (!isAdmin || id.startsWith('default-')) return
     try {
-      await removeKnowledgeItem(id)
+      await removeKnowledgeItem(id, userEmail)
       addToast?.('Instruccion eliminada', 'info', 'Base de conocimiento')
     } catch (e) {
       addToast?.(e.message || 'No se pudo eliminar', 'error', 'Base de conocimiento')
@@ -157,7 +202,17 @@ export default function KnowledgeBaseModal({ open, onClose, userEmail, onUseComm
                 className="rounded-xl p-3"
                 style={{ background: '#fff', border: '1px solid #C8DCC8' }}
               >
-                <p className="text-sm leading-relaxed" style={{ color: '#1B3318' }}>{item.text}</p>
+                {editingId === item.id ? (
+                  <textarea
+                    value={editingText}
+                    onChange={(e) => setEditingText(e.target.value)}
+                    className="w-full rounded-lg p-2 text-sm"
+                    rows={4}
+                    style={{ border: '1px solid #C8DCC8', background: '#FAFCFA', color: '#1B3318', resize: 'vertical' }}
+                  />
+                ) : (
+                  <p className="text-sm leading-relaxed" style={{ color: '#1B3318' }}>{item.text}</p>
+                )}
                 <div className="mt-2 flex items-center justify-between gap-2">
                   <span className="text-[10px]" style={{ color: '#9EBB9E' }}>{item.createdBy || 'admin'}</span>
                   <div className="flex items-center gap-1">
@@ -168,15 +223,42 @@ export default function KnowledgeBaseModal({ open, onClose, userEmail, onUseComm
                     >
                       Usar consulta
                     </button>
-                    {isAdmin && !item.id.startsWith('default-') && (
+                    {editingId === item.id ? (
+                      <>
+                        <button
+                          onClick={() => onEditSave(item)}
+                          disabled={!editingText.trim() || savingEditId === item.id}
+                          className="px-2 py-1 rounded-md text-xs disabled:opacity-50"
+                          style={{ background: '#E8F5E9', color: '#2E7D32', border: '1px solid #C8DCC8' }}
+                        >
+                          Guardar
+                        </button>
+                        <button
+                          onClick={onEditCancel}
+                          className="px-2 py-1 rounded-md text-xs"
+                          style={{ background: '#F3F4F6', color: '#4B5563', border: '1px solid #D1D5DB' }}
+                        >
+                          Cancelar
+                        </button>
+                      </>
+                    ) : (
                       <button
-                        onClick={() => onDelete(item.id)}
-                        className="px-2 py-1 rounded-md text-xs"
-                        style={{ background: '#FFF3F3', color: '#B91C1C', border: '1px solid #FFCDD2' }}
+                        onClick={() => onEditStart(item)}
+                        disabled={!isAdmin || item.id.startsWith('default-')}
+                        className="px-2 py-1 rounded-md text-xs disabled:opacity-50"
+                        style={{ background: '#F4F7F4', color: '#4A6B4A', border: '1px solid #C8DCC8' }}
                       >
-                        Eliminar
+                        Editar
                       </button>
                     )}
+                    <button
+                      onClick={() => onDelete(item.id)}
+                      disabled={!isAdmin || item.id.startsWith('default-')}
+                      className="px-2 py-1 rounded-md text-xs disabled:opacity-50"
+                      style={{ background: '#FFF3F3', color: '#B91C1C', border: '1px solid #FFCDD2' }}
+                    >
+                      Eliminar
+                    </button>
                   </div>
                 </div>
               </motion.div>

@@ -7,6 +7,7 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  updateDoc,
 } from 'firebase/firestore'
 import { db } from '../firebase'
 
@@ -88,6 +89,25 @@ export async function createKnowledgeItem({ text, tags = [], createdBy }) {
   return ref.id
 }
 
-export async function removeKnowledgeItem(id) {
+export async function updateKnowledgeItem({ id, text, tags, updatedBy }) {
+  const clean = (text || '').trim()
+  if (!id) throw new Error('Identificador de instruccion invalido.')
+  if (!clean) throw new Error('La instruccion no puede estar vacia.')
+  if (!isAdminUser(updatedBy)) {
+    throw new Error('Solo el usuario administrador puede editar instrucciones globales.')
+  }
+  const payload = {
+    text: clean,
+    updatedAt: serverTimestamp(),
+  }
+  if (Array.isArray(tags)) payload.tags = tags
+  await updateDoc(doc(db, COLLECTION, id), payload)
+}
+
+export async function removeKnowledgeItem(id, removedBy) {
+  if (!id) throw new Error('Identificador de instruccion invalido.')
+  if (!isAdminUser(removedBy)) {
+    throw new Error('Solo el usuario administrador puede eliminar instrucciones globales.')
+  }
   await deleteDoc(doc(db, COLLECTION, id))
 }
