@@ -96,6 +96,14 @@ export async function executeQuery(sql) {
 }
 
 /**
+ * Execute a non-select SQL statement.
+ */
+export async function executeStatement(sql) {
+  const c = await getConnection()
+  await c.query(sql)
+}
+
+/**
  * List all user tables currently loaded in DuckDB.
  */
 export async function listTables() {
@@ -114,4 +122,25 @@ export async function describeTable(tableName) {
     name: row.column_name,
     type: row.column_type,
   }))
+}
+
+/**
+ * Reorder columns by rebuilding the table with a new SELECT projection.
+ * `orderedColumns` can contain only a subset, and remaining columns are appended.
+ */
+export async function reorderTableColumns(tableName, orderedColumns = []) {
+  const c = await getConnection()
+  const result = await c.query(`DESCRIBE "${tableName}"`)
+  const existing = result.toArray().map(row => row.column_name)
+  if (!existing.length) return
+
+  const used = new Set()
+  const firstPart = orderedColumns.filter(col => existing.includes(col) && !used.has(col) && used.add(col))
+  const rest = existing.filter(col => !used.has(col))
+  const projection = [...firstPart, ...rest].map(col => `"${col}"`).join(', ')
+  const tmp = `__tmp_reorder_${Date.now()}`
+
+  await c.query(`CREATE TABLE "${tmp}" AS SELECT ${projection} FROM "${tableName}"`)
+  await c.query(`DROP TABLE "${tableName}"`)
+  await c.query(`ALTER TABLE "${tmp}" RENAME TO "${tableName}"`)
 }

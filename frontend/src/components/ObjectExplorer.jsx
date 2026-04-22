@@ -19,7 +19,7 @@ const TYPE_COLORS = {
 }
 const spring = { type: 'spring', stiffness: 380, damping: 28 }
 
-export default function ObjectExplorer({ tables, onInsertCommand, onDeleteTable, onOpenUploader, onSelectTable, selectedTable }) {
+export default function ObjectExplorer({ tables, onInsertCommand, onDeleteTable, onDeleteAllTables, onOpenUploader, onSelectTable, selectedTable }) {
   const [tooltip, setTooltip] = useState(null)
 
   return (
@@ -30,13 +30,23 @@ export default function ObjectExplorer({ tables, onInsertCommand, onDeleteTable,
         <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: '#2E7D32', letterSpacing: '0.12em' }}>
           Archivos Cargados
         </span>
-        <motion.button onClick={onOpenUploader} title="Cargar nuevo archivo" whileHover={{ scale: 1.12 }} whileTap={{ scale: 0.9 }} transition={spring}
-          className="w-6 h-6 rounded-lg flex items-center justify-center"
-          style={{ background: 'linear-gradient(135deg, #43A047, #2E7D32)', boxShadow: '0 2px 8px rgba(67,160,71,0.3)' }}>
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-        </motion.button>
+        <div className="flex items-center gap-1.5">
+          <motion.button onClick={onDeleteAllTables} title="Borrar todos los archivos cargados" whileHover={{ scale: 1.12 }} whileTap={{ scale: 0.9 }} transition={spring}
+            disabled={!tables.length}
+            className="w-6 h-6 rounded-lg flex items-center justify-center disabled:opacity-40"
+            style={{ background: '#FEE2E2', border: '1px solid #FCA5A5' }}>
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" style={{ color: '#B91C1C' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7h6m-7 0V5a1 1 0 011-1h6a1 1 0 011 1v2" />
+            </svg>
+          </motion.button>
+          <motion.button onClick={onOpenUploader} title="Cargar nuevo archivo" whileHover={{ scale: 1.12 }} whileTap={{ scale: 0.9 }} transition={spring}
+            className="w-6 h-6 rounded-lg flex items-center justify-center"
+            style={{ background: 'linear-gradient(135deg, #43A047, #2E7D32)', boxShadow: '0 2px 8px rgba(67,160,71,0.3)' }}>
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+          </motion.button>
+        </div>
       </div>
 
       {/* Cards */}

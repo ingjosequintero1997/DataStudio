@@ -31,7 +31,7 @@ const AGG_LABELS = {
 }
 
 /* ─ Banner que resume el cruce ejecutado ─────────────────────────────── */
-function CrossBanner({ ctx, onExport, onExportExcel }) {
+function CrossBanner({ ctx, onExport, onExportExcel, onOpenBuilder }) {
   if (!ctx) return null
   return (
     <div style={{ background: G.light, borderBottom: `1px solid ${G.border}`, padding: '10px 16px', flexShrink: 0 }}>
@@ -49,6 +49,10 @@ function CrossBanner({ ctx, onExport, onExportExcel }) {
           )}
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
+          <button onClick={onOpenBuilder} disabled={!onOpenBuilder}
+            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 12px', borderRadius: 7, border: `1px solid ${G.primary}`, background: '#fff', color: G.dark, fontFamily: 'Inter,sans-serif', fontSize: '0.75rem', fontWeight: 600, cursor: onOpenBuilder ? 'pointer' : 'not-allowed', opacity: onOpenBuilder ? 1 : 0.5 }}>
+            🧩 Construir archivo
+          </button>
           <button onClick={onExport}
             style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 12px', borderRadius: 7, border: `1px solid ${G.primary}`, background: '#fff', color: G.dark, fontFamily: 'Inter,sans-serif', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer' }}>
             ⬇ Exportar CSV
@@ -101,7 +105,7 @@ function CellValue({ value }) {
   return <span className="truncate">{str}</span>
 }
 
-export default function ResultsTable({ result, error, isExecuting, visibleColumns, onExport, onExportExcel }) {
+export default function ResultsTable({ result, error, isExecuting, visibleColumns, onExport, onExportExcel, onOpenBuilder, onClear }) {
   const displayColumns = visibleColumns?.length ? visibleColumns : (result?.columns || [])
 
   const colWidths = useMemo(() => {
@@ -127,7 +131,7 @@ export default function ResultsTable({ result, error, isExecuting, visibleColumn
   if (error) {
     return (
       <div className="flex flex-col h-full" style={{ background: '#fff' }}>
-        <TabBar hasError />
+        <TabBar hasError canClear onClear={onClear} />
         <div className="flex-1 p-4">
           <div style={{ background: '#FFF3F3', border: '1px solid #FFCDD2', borderRadius: 12, padding: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
@@ -144,7 +148,7 @@ export default function ResultsTable({ result, error, isExecuting, visibleColumn
   if (!result || !result.rows) {
     return (
       <div className="flex flex-col h-full" style={{ background: '#fff' }}>
-        <TabBar />
+        <TabBar canClear={!!result || !!error} onClear={onClear} />
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, color: G.dim }}>
           {isExecuting ? (
             <>
@@ -201,8 +205,8 @@ export default function ResultsTable({ result, error, isExecuting, visibleColumn
 
   return (
     <div className="flex flex-col h-full" style={{ background: '#fff' }}>
-      <TabBar rowCount={rowCount} duration={duration} hasCross={!!crossContext} />
-      <CrossBanner ctx={crossContext} onExport={onExport} onExportExcel={onExportExcel} />
+      <TabBar rowCount={rowCount} duration={duration} hasCross={!!crossContext} canClear onClear={onClear} />
+      <CrossBanner ctx={crossContext} onExport={onExport} onExportExcel={onExportExcel} onOpenBuilder={onOpenBuilder} />
       <div className="flex-1 overflow-hidden">
         <AutoSizer>
           {({ width, height }) => {
@@ -258,9 +262,9 @@ export default function ResultsTable({ result, error, isExecuting, visibleColumn
   )
 }
 
-function TabBar({ hasError, hasCross }) {
+function TabBar({ hasError, hasCross, canClear, onClear }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', padding: '0 12px', background: '#fff', borderBottom: `2px solid ${G.primary}`, flexShrink: 0 }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 12px', background: '#fff', borderBottom: `2px solid ${G.primary}`, flexShrink: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderBottom: `2px solid ${G.primary}`, marginBottom: -2, color: hasError ? '#C62828' : G.dark, fontSize: '0.78rem', fontWeight: 600, fontFamily: 'Inter,sans-serif' }}>
         {hasError ? (
           <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -273,6 +277,26 @@ function TabBar({ hasError, hasCross }) {
         )}
         {hasError ? 'Error' : hasCross ? 'Resultado del Cruce' : 'Resultados'}
       </div>
+      {canClear && (
+        <button
+          onClick={onClear}
+          title="Limpiar resultado"
+          style={{
+            marginRight: 4,
+            width: 24,
+            height: 24,
+            borderRadius: 6,
+            border: `1px solid ${G.border}`,
+            background: '#fff',
+            color: G.text2,
+            cursor: 'pointer',
+            fontWeight: 700,
+            lineHeight: '22px',
+          }}
+        >
+          x
+        </button>
+      )}
     </div>
   )
 }

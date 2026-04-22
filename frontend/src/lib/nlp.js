@@ -35,6 +35,14 @@ function extractTwoTables(norm, tables) {
   return found.length >= 2 ? [found[0].name, found[1].name] : []
 }
 function extractNumber(norm) { const m = norm.match(/\b(\d+)\b/); return m ? parseInt(m[1]) : null }
+function extractOrderedColumns(text) {
+  const m = text.match(/(?:columnas|cols?)\s*:?\s*(.+)$/i)
+  if (!m) return []
+  return m[1]
+    .split(',')
+    .map(v => v.trim())
+    .filter(Boolean)
+}
 function detectOrder(norm) {
   if (/(desc|mayor.*menor|descendente)/.test(norm)) return "DESC"
   if (/(asc|menor.*mayor|ascendente)/.test(norm)) return "ASC"
@@ -114,10 +122,55 @@ export function parseCommand(input, tables) {
           }
         }
         sql += ";"
-        return { sql, action:"query", description:`Actualizar "${colName}" en "${table.name}"`, isDML:true }
+        return { sql, action:"query", description:`Actualizar "${colName}" en "${table.name}"`, isDML:true, targetTable: table.name }
       }
     }
     return { error:`Especifica: "Actualiza ${table.name} pon [columna] a [valor] donde [columna2] sea [valor2]"` }
+  }
+
+  // ── REEMPLAZAR VALORES EN COLUMNA ─────────────────────────────────────────
+  if (/(reemplaza|reemplazar|sustituye|sustituir)/.test(norm)) {
+    const table = getBestTable(norm, tables)
+    const cols = table.columns || []
+    const p1 = norm.match(/(?:en|de)\s+(.+?)\s+(?:el valor|valor)?\s*["']?(.+?)["']?\s+(?:por|a)\s*["']?(.+?)["']?$/)
+    const p2 = norm.match(/(?:columna)\s+(.+?)\s+(?:de|en)\s+[a-z0-9_\s]+\s+(?:de|desde)\s*["']?(.+?)["']?\s+(?:a|por)\s*["']?(.+?)["']?$/)
+    const m = p1 || p2
+    if (m) {
+      const col = findColumn(m[1], cols)
+      if (!col) return { error: `No encontre la columna en "${table.name}".` }
+      const oldVal = m[2]?.trim()
+      const newVal = m[3]?.trim()
+      const colInfo = table.columns?.find(c => c.name === col.name)
+      const sql = `UPDATE "${table.name}"\nSET "${col.name}" = ${quoteVal(newVal, isNumericType(colInfo?.type))}\nWHERE "${col.name}" = ${quoteVal(oldVal, isNumericType(colInfo?.type))};`
+      return { sql, action: 'query', description: `Reemplazar valores en "${col.name}"`, isDML: true, targetTable: table.name }
+    }
+  }
+
+  // ── VACIAR / LIMPIAR COLUMNA COMPLETA ─────────────────────────────────────
+  if (/(vaciar columna|limpiar columna|poner nulo|dejar en blanco la columna|borrar datos de la columna)/.test(norm)) {
+    const table = getBestTable(norm, tables)
+    const col = findColumn(norm, table.columns || [])
+    if (!col) return { error: `Indica la columna a vaciar en "${table.name}".` }
+    const sql = `UPDATE "${table.name}"\nSET "${col.name}" = NULL;`
+    return { sql, action: 'query', description: `Vaciar columna "${col.name}"`, isDML: true, targetTable: table.name }
+  }
+
+  // ── REORDENAR COLUMNAS ─────────────────────────────────────────────────────
+  if (/(reordena|reordenar|mueve columnas|cambia posicion de columnas|orden de columnas)/.test(norm)) {
+    const table = getBestTable(norm, tables)
+    const orderedRaw = extractOrderedColumns(input)
+    const orderedColumns = orderedRaw
+      .map(name => findColumn(name, table.columns || [])?.name)
+      .filter(Boolean)
+    if (!orderedColumns.length) {
+      return { error: `Especifica el orden asi: Reordena columnas de ${table.name}: col1, col2, col3` }
+    }
+    return {
+      action: 'reorderColumns',
+      tableName: table.name,
+      orderedColumns,
+      description: `Reordenar columnas en "${table.name}"`,
+    }
   }
 
   // ── ELIMINAR REGISTROS / DELETE ───────────────────────────────────────────
@@ -131,7 +184,7 @@ export function parseCommand(input, tables) {
       const colInfo = tables.find(t=>t.name===table.name)?.columns?.find(c=>c.name===wCol)
       if (wCol) {
         const sql = `DELETE FROM "${table.name}"\nWHERE "${wCol}" = ${quoteVal(wVal, isNumericType(colInfo?.type))};`
-        return { sql, action:"query", description:`Eliminar registros de "${table.name}" donde "${wCol}" = ${wVal}`, isDML:true }
+        return { sql, action:"query", description:`Eliminar registros de "${table.name}" donde "${wCol}" = ${wVal}`, isDML:true, targetTable: table.name }
       }
     }
     return { error:`Especifica: "Elimina registros de ${table.name} donde [columna] sea [valor]"` }
@@ -148,7 +201,7 @@ export function parseCommand(input, tables) {
       let sql = `ALTER TABLE "${table.name}" ADD COLUMN "${colName}" ${colType}`
       if (defVal) sql += ` DEFAULT ${quoteVal(defVal, isNumericType(colType))}`
       sql += ";"
-      return { sql, action:"query", description:`Agregar columna "${colName}" a "${table.name}"`, isDML:true }
+      return { sql, action:"query", description:`Agregar columna "${colName}" a "${table.name}"`, isDML:true, targetTable: table.name }
     }
     return { error:`Especifica: "Agrega columna [nombre] de tipo [VARCHAR/INTEGER/DATE] a ${table.name}"` }
   }
@@ -161,7 +214,7 @@ export function parseCommand(input, tables) {
     const col = findColumn(cleanNorm, cols)
     if (!col) return { error:`No encontré esa columna en "${table.name}". Columnas: ${cols.map(c=>`"${c.name}"`).join(", ")}` }
     const sql = `ALTER TABLE "${table.name}" DROP COLUMN "${col.name}";`
-    return { sql, action:"query", description:`Eliminar columna "${col.name}" de "${table.name}"`, isDML:true }
+    return { sql, action:"query", description:`Eliminar columna "${col.name}" de "${table.name}"`, isDML:true, targetTable: table.name }
   }
 
   // ── RENOMBRAR COLUMNA ────────────────────────────────────────────────────
@@ -174,7 +227,7 @@ export function parseCommand(input, tables) {
       const newName = m[2].trim().replace(/\s+/g,"_")
       if (oldCol) {
         const sql = `ALTER TABLE "${table.name}" RENAME COLUMN "${oldCol.name}" TO "${newName}";`
-        return { sql, action:"query", description:`Renombrar "${oldCol.name}" → "${newName}" en "${table.name}"`, isDML:true }
+        return { sql, action:"query", description:`Renombrar "${oldCol.name}" → "${newName}" en "${table.name}"`, isDML:true, targetTable: table.name }
       }
     }
     return { error:`Especifica: "Renombra columna [nombre_actual] a [nombre_nuevo] en ${table.name}"` }
@@ -385,6 +438,9 @@ export const EXAMPLE_COMMANDS = [
   "Dame el último registro de la columna fecha",
   "Busca en clientes donde ciudad sea Caracas",
   "Actualiza empleados pon salario a 5000 donde nombre sea Juan",
+  "Reemplaza en clientes el valor inactivo por activo en estado",
+  "Vaciar columna observacion en clientes",
+  "Reordena columnas de clientes: id, nombre, ciudad, estado",
   "Elimina registros de pacientes donde estado sea inactivo",
   "Agrega columna observacion de tipo VARCHAR a clientes",
   "Duplicados en la columna cédula",

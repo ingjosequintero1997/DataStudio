@@ -2,9 +2,10 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { signOut } from 'firebase/auth'
 import { motion, AnimatePresence } from 'framer-motion'
 import { auth } from '../firebase'
-import { initDuckDB, executeQuery, dropTable, registerCSVAsTable } from '../lib/duckdb'
+import { initDuckDB, executeQuery, dropTable, registerCSVAsTable, describeTable, reorderTableColumns } from '../lib/duckdb'
 import { loadTablesMeta, loadTableBuffer, deleteTable } from '../lib/indexeddb'
 import { parseCommand } from '../lib/nlp'
+import { saveResultAsTable, projectResult, sanitizeTableName, rowsToCsv } from '../lib/resultTableService'
 import { ToastContainer } from './Toast'
 import Toolbar from './Toolbar'
 import ObjectExplorer from './ObjectExplorer'
@@ -13,6 +14,8 @@ import ResultsTable from './ResultsTable'
 import FileUploader from './FileUploader'
 import RightSidebar from './RightSidebar'
 import CrossWizard from './CrossWizard'
+import KnowledgeBaseModal from '../modules/knowledgeBase/KnowledgeBaseModal'
+import DatasetBuilderModal from '../modules/datasetBuilder/DatasetBuilderModal'
 
 const spring = { type: 'spring', stiffness: 300, damping: 30 }
 
@@ -63,6 +66,9 @@ export default function Layout({ user }) {
   const [toasts, setToasts] = useState([])
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [showCrossWizard, setShowCrossWizard] = useState(false)
+  const [showKnowledgeBase, setShowKnowledgeBase] = useState(false)
+  const [showDatasetBuilder, setShowDatasetBuilder] = useState(false)
+  const [datasetBuilderSource, setDatasetBuilderSource] = useState('result')
   const containerRef = useRef(null)
 
   const addToast = useCallback((message, type = 'info', title) => {
@@ -112,6 +118,82 @@ export default function Layout({ user }) {
     setStatusMessage('Tabla "' + name + '" eliminada.')
     addToast('Tabla eliminada del motor', 'info', '"' + name + '"')
   }, [])
+
+  const handleDeleteAllTables = useCallback(async () => {
+    if (!tables.length) return
+    const ok = window.confirm('Se borraran todos los archivos cargados. Deseas continuar?')
+    if (!ok) return
+    for (const t of tables) {
+      await dropTable(t.name)
+      await deleteTable(t.name)
+    }
+    setTables([])
+    setSelectedTable(null)
+    setStatusMessage('Todos los archivos cargados fueron eliminados.')
+    addToast('Se eliminaron ' + tables.length + ' archivo(s)', 'info', 'Archivos cargados')
+  }, [tables])
+
+  const handleClearResults = useCallback(() => {
+    setQueryResult(null)
+    setQueryError(null)
+    setStatusMessage('Resultados limpiados. Listo para una nueva consulta.')
+  }, [])
+
+  const handleBuildDataset = useCallback(async (config) => {
+    try {
+      let sourceResult = null
+      if (config.sourceType === 'result') {
+        if (!queryResult?.rows?.length) {
+          addToast('No hay resultado activo para construir.', 'info', 'Constructor')
+          return
+        }
+        sourceResult = queryResult
+      } else {
+        const sourceName = config.sourceTable
+        if (!sourceName) {
+          addToast('Selecciona una tabla origen.', 'info', 'Constructor')
+          return
+        }
+        const tableMeta = tables.find(t => t.name === sourceName)
+        const cols = (config.selectedColumns?.length ? config.selectedColumns : (tableMeta?.columns || []).map(c => c.name))
+        const selectCols = cols.map(c => `"${c}"`).join(', ')
+        const whereClause = config.whereClause?.trim() ? `\nWHERE ${config.whereClause.trim()}` : ''
+        const sql = `SELECT ${selectCols}\nFROM "${sourceName}"${whereClause};`
+        sourceResult = await executeQuery(sql)
+      }
+
+      const projected = projectResult(sourceResult, config.selectedColumns)
+      if (!projected.rows.length) {
+        addToast('El resultado del constructor quedo vacio.', 'info', 'Constructor')
+        return
+      }
+
+      let targetName = ''
+      if (config.targetMode === 'replace_main') {
+        targetName = sanitizeTableName(config.targetTable)
+      } else {
+        targetName = sanitizeTableName(config.newTableName, 'resultado_personalizado')
+      }
+
+      const meta = await saveResultAsTable(targetName, projected)
+      handleTableLoaded(meta)
+      setShowDatasetBuilder(false)
+      setStatusMessage('Archivo construido: "' + targetName + '"')
+      addToast(meta.rowCount.toLocaleString() + ' filas', 'success', 'Archivo "' + targetName + '" creado')
+
+      if (config.targetMode === 'new_file' && config.downloadCopy) {
+        const csv = rowsToCsv(projected.columns, projected.rows)
+        const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
+        const a = document.createElement('a')
+        a.href = url
+        a.download = targetName + '.csv'
+        a.click()
+        URL.revokeObjectURL(url)
+      }
+    } catch (e) {
+      addToast((e.message || 'No se pudo construir el archivo').slice(0, 120), 'error', 'Constructor')
+    }
+  }, [queryResult, tables, handleTableLoaded])
 
   const handleExportCSV = useCallback((resOverride) => {
     const res = resOverride || lastResult || queryResult
@@ -163,8 +245,27 @@ export default function Layout({ user }) {
     }
     if (parsed.action === 'export') { handleExportCSV(); setIsExecuting(false); return }
     if (parsed.action === 'help') {
-      setQueryError('Comandos disponibles: cruzar, consolidar, mostrar columnas, quitar columna, contar registros, mostrar tabla, exportar.')
+      setQueryError('Comandos disponibles: cruzar, consolidar, filtrar, actualizar, reemplazar, vaciar columna, reordenar columnas, contar, mostrar, exportar.')
       setIsExecuting(false)
+      return
+    }
+    if (parsed.action === 'reorderColumns') {
+      try {
+        await reorderTableColumns(parsed.tableName, parsed.orderedColumns)
+        const cols = await describeTable(parsed.tableName)
+        const cnt = await executeQuery(`SELECT COUNT(*) AS n FROM "${parsed.tableName}"`)
+        setTables(prev => prev.map(t => t.name === parsed.tableName
+          ? { ...t, columns: cols, rowCount: parseInt(cnt.rows[0]?.n || 0, 10) }
+          : t
+        ))
+        setStatusMessage('Columnas reordenadas en "' + parsed.tableName + '"')
+        addToast('Estructura actualizada', 'success', 'Reordenar columnas')
+      } catch (e) {
+        setQueryError('No se pudieron reordenar columnas: ' + (e.message || String(e)))
+        setStatusMessage('Error al reordenar columnas.')
+      } finally {
+        setIsExecuting(false)
+      }
       return
     }
     setStatusMessage(parsed.description + '...')
@@ -204,7 +305,7 @@ export default function Layout({ user }) {
     } finally {
       setIsExecuting(false)
     }
-  }, [tables, handleExportCSV])
+  }, [tables, handleExportCSV, addToast])
 
   const handleCrossViaToolbar = () => {
     if (tables.length < 2) { addToast('Carga al menos 2 archivos para cruzar.', 'info'); return }
@@ -263,6 +364,11 @@ export default function Layout({ user }) {
         onCrossTable={handleCrossViaToolbar}
         onConsolidate={handleConsolidate}
         onCleanColumns={handleCleanColumns}
+        onOpenKnowledgeBase={() => setShowKnowledgeBase(true)}
+        onOpenDatasetBuilder={() => {
+          setDatasetBuilderSource(queryResult?.rows?.length ? 'result' : 'table')
+          setShowDatasetBuilder(true)
+        }}
         isExecuting={isExecuting}
         hasResults={!!(queryResult?.rows?.length)}
         dbReady={dbReady}
@@ -308,6 +414,7 @@ export default function Layout({ user }) {
           >
             <ObjectExplorer tables={tables} onInsertCommand={cmd => { setInjectedCommand(cmd); setDrawerOpen(false) }}
               onDeleteTable={handleDeleteTable} onOpenUploader={() => { setShowUploader(true); setDrawerOpen(false) }}
+              onDeleteAllTables={handleDeleteAllTables}
               onSelectTable={n => { setSelectedTable(n); setDrawerOpen(false) }} selectedTable={selectedTable} />
           </motion.div>
         </AnimatePresence>
@@ -316,6 +423,7 @@ export default function Layout({ user }) {
         <div style={{ width: sidebarWidth }} className="hidden md:flex flex-col shrink-0 overflow-hidden">
           <ObjectExplorer tables={tables} onInsertCommand={cmd => setInjectedCommand(cmd)}
             onDeleteTable={handleDeleteTable} onOpenUploader={() => setShowUploader(true)}
+            onDeleteAllTables={handleDeleteAllTables}
             onSelectTable={setSelectedTable} selectedTable={selectedTable} />
         </div>
 
@@ -336,6 +444,11 @@ export default function Layout({ user }) {
                 visibleColumns={visibleCols?.length ? visibleCols : undefined}
                 onExport={() => handleExportCSV()}
                 onExportExcel={() => handleExportExcel()}
+                onOpenBuilder={() => {
+                  setDatasetBuilderSource('result')
+                  setShowDatasetBuilder(true)
+                }}
+                onClear={handleClearResults}
               />
             )}
           </div>
@@ -382,6 +495,31 @@ export default function Layout({ user }) {
               setStatusMessage('Cruce ejecutado — ' + res.rowCount.toLocaleString() + ' fila(s)')
               addToast(res.rowCount.toLocaleString() + ' filas', 'success', 'Cruce completado')
             }}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showKnowledgeBase && (
+          <KnowledgeBaseModal
+            open={showKnowledgeBase}
+            userEmail={user?.email}
+            onClose={() => setShowKnowledgeBase(false)}
+            addToast={addToast}
+            onUseCommand={(cmd) => setInjectedCommand(cmd)}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showDatasetBuilder && (
+          <DatasetBuilderModal
+            open={showDatasetBuilder}
+            onClose={() => setShowDatasetBuilder(false)}
+            tables={tables}
+            currentResult={queryResult}
+            defaultSource={datasetBuilderSource}
+            onCreate={handleBuildDataset}
           />
         )}
       </AnimatePresence>

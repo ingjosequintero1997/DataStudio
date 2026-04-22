@@ -56,6 +56,7 @@ function Divider() {
 
 export default function Toolbar({
   user, onExport, onOpenUploader, onCrossTable, onConsolidate, onCleanColumns,
+  onOpenKnowledgeBase, onOpenDatasetBuilder,
   isExecuting, hasResults, dbReady, onSignOut, onToggleDrawer,
 }) {
   return (
@@ -147,6 +148,18 @@ export default function Toolbar({
           gradient="linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)" glow="rgba(79,70,229,0.35)"
           icon={<svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>}
           label="Consolidar"
+        />
+        <PremiumButton onClick={onOpenDatasetBuilder} disabled={!dbReady}
+          gradient="linear-gradient(135deg, #0284c7 0%, #0369a1 100%)" glow="rgba(2,132,199,0.35)"
+          icon={<svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7h18M8 7v10m8-10v10M5 17h14" /></svg>}
+          label="Constructor"
+          title="Construir archivo desde cruce o tablas"
+        />
+        <PremiumButton onClick={onOpenKnowledgeBase} disabled={!dbReady}
+          gradient="linear-gradient(135deg, #16a34a 0%, #166534 100%)" glow="rgba(22,163,74,0.35)"
+          icon={<svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.746 0 3.332.477 4.5 1.253v13C19.832 18.477 18.246 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg>}
+          label="Base conocimiento"
+          title="Base de conocimiento compartida"
         />
         <Divider />
         <PremiumButton onClick={onCleanColumns} disabled={!dbReady}

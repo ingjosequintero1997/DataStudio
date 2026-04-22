@@ -343,7 +343,7 @@ export default function CrossWizard({ tables, onClose, onResult }) {
               <span style={{ color: G.primary, fontSize: '1rem', lineHeight: 1 }}>ℹ</span>
               <span style={{ color: G.text2 }}>
                 Los resultados aparecerán en el área principal con un resumen detallado del cruce.
-                Desde allí podrás <strong>exportar</strong> el CSV o <strong>guardar</strong> como nueva tabla.
+                Desde allí podrás <strong>exportar CSV/Excel</strong> o usar <strong>Construir archivo</strong> para crear una nueva versión.
               </span>
             </div>
           )}
