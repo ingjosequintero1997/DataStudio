@@ -56,7 +56,7 @@ function Divider() {
 
 export default function Toolbar({
   user, onExport, onOpenUploader, onCrossTable, onConsolidate, onCleanColumns,
-  onOpenKnowledgeBase, onOpenDatasetBuilder,
+  onOpenKnowledgeBase,
   isExecuting, hasResults, dbReady, onSignOut, onToggleDrawer,
 }) {
   return (
@@ -148,12 +148,6 @@ export default function Toolbar({
           gradient="linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)" glow="rgba(79,70,229,0.35)"
           icon={<svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>}
           label="Consolidar"
-        />
-        <PremiumButton onClick={onOpenDatasetBuilder} disabled={!dbReady}
-          gradient="linear-gradient(135deg, #0284c7 0%, #0369a1 100%)" glow="rgba(2,132,199,0.35)"
-          icon={<svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7h18M8 7v10m8-10v10M5 17h14" /></svg>}
-          label="Constructor"
-          title="Construir archivo desde cruce o tablas"
         />
         <PremiumButton onClick={onOpenKnowledgeBase} disabled={!dbReady}
           gradient="linear-gradient(135deg, #16a34a 0%, #166534 100%)" glow="rgba(22,163,74,0.35)"

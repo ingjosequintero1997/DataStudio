@@ -5,7 +5,7 @@ import { auth } from '../firebase'
 import { initDuckDB, executeQuery, dropTable, registerCSVAsTable, describeTable, reorderTableColumns } from '../lib/duckdb'
 import { loadTablesMeta, loadTableBuffer, deleteTable } from '../lib/indexeddb'
 import { parseCommand } from '../lib/nlp'
-import { saveResultAsTable, projectResult, sanitizeTableName, rowsToCsv } from '../lib/resultTableService'
+import { saveResultAsTable } from '../lib/resultTableService'
 import { ToastContainer } from './Toast'
 import Toolbar from './Toolbar'
 import ObjectExplorer from './ObjectExplorer'
@@ -15,7 +15,6 @@ import FileUploader from './FileUploader'
 import RightSidebar from './RightSidebar'
 import CrossWizard from './CrossWizard'
 import KnowledgeBaseModal from '../modules/knowledgeBase/KnowledgeBaseModal'
-import DatasetBuilderModal from '../modules/datasetBuilder/DatasetBuilderModal'
 
 const spring = { type: 'spring', stiffness: 300, damping: 30 }
 
@@ -67,8 +66,6 @@ export default function Layout({ user }) {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [showCrossWizard, setShowCrossWizard] = useState(false)
   const [showKnowledgeBase, setShowKnowledgeBase] = useState(false)
-  const [showDatasetBuilder, setShowDatasetBuilder] = useState(false)
-  const [datasetBuilderSource, setDatasetBuilderSource] = useState('result')
   const containerRef = useRef(null)
 
   const addToast = useCallback((message, type = 'info', title) => {
@@ -139,61 +136,40 @@ export default function Layout({ user }) {
     setStatusMessage('Resultados limpiados. Listo para una nueva consulta.')
   }, [])
 
-  const handleBuildDataset = useCallback(async (config) => {
-    try {
-      let sourceResult = null
-      if (config.sourceType === 'result') {
-        if (!queryResult?.rows?.length) {
-          addToast('No hay resultado activo para construir.', 'info', 'Constructor')
-          return
-        }
-        sourceResult = queryResult
-      } else {
-        const sourceName = config.sourceTable
-        if (!sourceName) {
-          addToast('Selecciona una tabla origen.', 'info', 'Constructor')
-          return
-        }
-        const tableMeta = tables.find(t => t.name === sourceName)
-        const cols = (config.selectedColumns?.length ? config.selectedColumns : (tableMeta?.columns || []).map(c => c.name))
-        const selectCols = cols.map(c => `"${c}"`).join(', ')
-        const whereClause = config.whereClause?.trim() ? `\nWHERE ${config.whereClause.trim()}` : ''
-        const sql = `SELECT ${selectCols}\nFROM "${sourceName}"${whereClause};`
-        sourceResult = await executeQuery(sql)
-      }
+  const handleApplyCrossPostAction = useCallback(async (res) => {
+    const ctx = res?.crossContext
+    if (!ctx) return
+    const mode = ctx.postAction || 'only_result'
+    if (mode === 'only_result') return
 
-      const projected = projectResult(sourceResult, config.selectedColumns)
-      if (!projected.rows.length) {
-        addToast('El resultado del constructor quedo vacio.', 'info', 'Constructor')
+    try {
+      if (!res?.rows?.length) {
+        addToast('El cruce no tiene filas para aplicar en archivos.', 'info', 'Cruce')
         return
       }
 
       let targetName = ''
-      if (config.targetMode === 'replace_main') {
-        targetName = sanitizeTableName(config.targetTable)
-      } else {
-        targetName = sanitizeTableName(config.newTableName, 'resultado_personalizado')
-      }
+      if (mode === 'replace_main') targetName = ctx.targetTable || ctx.leftTable
+      if (mode === 'new_tab') targetName = (ctx.newTableName || `${ctx.leftTable}_cruce_nuevo`).replace(/[^a-zA-Z0-9_]/g, '_')
+      if (mode === 'new_file') targetName = (ctx.newTableName || `archivo_cruce_${Date.now()}`).replace(/[^a-zA-Z0-9_]/g, '_')
+      if (!targetName) return
 
-      const meta = await saveResultAsTable(targetName, projected)
+      const meta = await saveResultAsTable(targetName, res)
       handleTableLoaded(meta)
-      setShowDatasetBuilder(false)
-      setStatusMessage('Archivo construido: "' + targetName + '"')
-      addToast(meta.rowCount.toLocaleString() + ' filas', 'success', 'Archivo "' + targetName + '" creado')
-
-      if (config.targetMode === 'new_file' && config.downloadCopy) {
-        const csv = rowsToCsv(projected.columns, projected.rows)
-        const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
-        const a = document.createElement('a')
-        a.href = url
-        a.download = targetName + '.csv'
-        a.click()
-        URL.revokeObjectURL(url)
+      if (mode === 'replace_main') {
+        setStatusMessage('Cruce aplicado al archivo principal: "' + targetName + '"')
+        addToast(meta.rowCount.toLocaleString() + ' filas', 'success', 'Archivo principal actualizado')
+      } else if (mode === 'new_tab') {
+        setStatusMessage('Cruce agregado en nueva pestaña: "' + targetName + '"')
+        addToast(meta.rowCount.toLocaleString() + ' filas', 'success', 'Nueva pestaña creada')
+      } else {
+        setStatusMessage('Cruce guardado como archivo diferente: "' + targetName + '"')
+        addToast(meta.rowCount.toLocaleString() + ' filas', 'success', 'Archivo diferente creado')
       }
     } catch (e) {
-      addToast((e.message || 'No se pudo construir el archivo').slice(0, 120), 'error', 'Constructor')
+      addToast((e.message || 'No se pudo aplicar el resultado del cruce').slice(0, 120), 'error', 'Cruce')
     }
-  }, [queryResult, tables, handleTableLoaded])
+  }, [handleTableLoaded, addToast])
 
   const handleExportCSV = useCallback((resOverride) => {
     const res = resOverride || lastResult || queryResult
@@ -365,10 +341,6 @@ export default function Layout({ user }) {
         onConsolidate={handleConsolidate}
         onCleanColumns={handleCleanColumns}
         onOpenKnowledgeBase={() => setShowKnowledgeBase(true)}
-        onOpenDatasetBuilder={() => {
-          setDatasetBuilderSource(queryResult?.rows?.length ? 'result' : 'table')
-          setShowDatasetBuilder(true)
-        }}
         isExecuting={isExecuting}
         hasResults={!!(queryResult?.rows?.length)}
         dbReady={dbReady}
@@ -444,10 +416,6 @@ export default function Layout({ user }) {
                 visibleColumns={visibleCols?.length ? visibleCols : undefined}
                 onExport={() => handleExportCSV()}
                 onExportExcel={() => handleExportExcel()}
-                onOpenBuilder={() => {
-                  setDatasetBuilderSource('result')
-                  setShowDatasetBuilder(true)
-                }}
                 onClear={handleClearResults}
               />
             )}
@@ -489,11 +457,12 @@ export default function Layout({ user }) {
           <CrossWizard
             tables={tables}
             onClose={() => setShowCrossWizard(false)}
-            onResult={(res) => {
+            onResult={async (res) => {
               setQueryResult(res)
               setLastResult(res)
               setStatusMessage('Cruce ejecutado — ' + res.rowCount.toLocaleString() + ' fila(s)')
               addToast(res.rowCount.toLocaleString() + ' filas', 'success', 'Cruce completado')
+              await handleApplyCrossPostAction(res)
             }}
           />
         )}
@@ -507,19 +476,6 @@ export default function Layout({ user }) {
             onClose={() => setShowKnowledgeBase(false)}
             addToast={addToast}
             onUseCommand={(cmd) => setInjectedCommand(cmd)}
-          />
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {showDatasetBuilder && (
-          <DatasetBuilderModal
-            open={showDatasetBuilder}
-            onClose={() => setShowDatasetBuilder(false)}
-            tables={tables}
-            currentResult={queryResult}
-            defaultSource={datasetBuilderSource}
-            onCreate={handleBuildDataset}
           />
         )}
       </AnimatePresence>

@@ -43,6 +43,20 @@ function extractOrderedColumns(text) {
     .map(v => v.trim())
     .filter(Boolean)
 }
+function parseBulkPairs(rawPairs) {
+  const source = (rawPairs || '').trim().replace(/[{}]/g, '')
+  if (!source) return []
+  return source
+    .split(/\s*[;,]\s*/)
+    .map(p => p.trim())
+    .filter(Boolean)
+    .map(p => {
+      const m = p.match(/(.+?)\s*(?:=>|:|=)\s*(.+)/)
+      if (!m) return null
+      return { key: m[1].trim().replace(/^['"]|['"]$/g, ''), value: m[2].trim().replace(/^['"]|['"]$/g, '') }
+    })
+    .filter(Boolean)
+}
 function detectOrder(norm) {
   if (/(desc|mayor.*menor|descendente)/.test(norm)) return "DESC"
   if (/(asc|menor.*mayor|ascendente)/.test(norm)) return "ASC"
@@ -98,6 +112,56 @@ export function parseCommand(input, tables) {
   }
 
   // ── ACTUALIZAR / UPDATE ───────────────────────────────────────────────────
+  if (/(actualiza masivo|actualizacion masiva|actualizar masivamente|carga masiva|por lote|muchos datos)/.test(norm)) {
+    const table = getBestTable(norm, tables)
+    const cols = table.columns || []
+    const m = raw.match(/columna\s+(.+?)\s+(?:por|usando|segun|con clave)\s+(.+?)\s+(?:con|datos|mapeo)\s*:?\s*(.+)$/i)
+    if (!m) {
+      return { error: `Usa este formato: Actualiza masivo ${table.name} columna [columna_objetivo] por [columna_clave] con: id1=>valor1; id2=>valor2; id3=>valor3` }
+    }
+    const targetCol = findColumn(m[1], cols)?.name
+    const keyCol = findColumn(m[2], cols)?.name
+    const pairs = parseBulkPairs(m[3])
+    if (!targetCol || !keyCol) return { error: `No encontre columna objetivo o columna clave en "${table.name}".` }
+    if (!pairs.length) return { error: 'No pude leer los pares clave=>valor para la actualización masiva.' }
+
+    const targetInfo = cols.find(c => c.name === targetCol)
+    const keyInfo = cols.find(c => c.name === keyCol)
+    const whenCases = pairs
+      .map(p => `WHEN ${quoteVal(p.key, isNumericType(keyInfo?.type))} THEN ${quoteVal(p.value, isNumericType(targetInfo?.type))}`)
+      .join('\n  ')
+    const inList = pairs.map(p => quoteVal(p.key, isNumericType(keyInfo?.type))).join(', ')
+    const sql =
+      `UPDATE "${table.name}"\n` +
+      `SET "${targetCol}" = CASE "${keyCol}"\n  ${whenCases}\n  ELSE "${targetCol}"\nEND\n` +
+      `WHERE "${keyCol}" IN (${inList});`
+    return {
+      sql,
+      action: 'query',
+      description: `Actualización masiva de "${targetCol}" usando "${keyCol}" (${pairs.length} cambios)`,
+      isDML: true,
+      targetTable: table.name,
+    }
+  }
+
+  if (/(actualiza toda la columna|actualizar toda la columna|actualiza toda columna|reemplaza todos los datos de la columna|todos los datos de la columna)/.test(norm)) {
+    const table = getBestTable(norm, tables)
+    const cols = table.columns || []
+    const m = raw.match(/columna\s+(.+?)\s+(?:a|por|con)\s+["']?(.+?)["']?(?:\s+en\s+|\s+de\s+|$)/i)
+    if (!m) return { error: `Especifica: Actualiza toda la columna [columna] a [valor] en ${table.name}` }
+    const targetCol = findColumn(m[1], cols)?.name
+    if (!targetCol) return { error: `No encontre esa columna en "${table.name}".` }
+    const targetInfo = cols.find(c => c.name === targetCol)
+    const sql = `UPDATE "${table.name}"\nSET "${targetCol}" = ${quoteVal(m[2].trim(), isNumericType(targetInfo?.type))};`
+    return {
+      sql,
+      action: 'query',
+      description: `Actualizar todos los datos de "${targetCol}"`,
+      isDML: true,
+      targetTable: table.name,
+    }
+  }
+
   if (/(actualiza|actualizar|cambia|cambiar|modifica|modificar|pon el valor|establece|set\s)/.test(norm)) {
     const table = getBestTable(norm, tables)
     const cols = table.columns||[]
@@ -438,6 +502,8 @@ export const EXAMPLE_COMMANDS = [
   "Dame el último registro de la columna fecha",
   "Busca en clientes donde ciudad sea Caracas",
   "Actualiza empleados pon salario a 5000 donde nombre sea Juan",
+  "Actualiza masivo clientes columna estado por id con: 1001=>activo; 1002=>inactivo; 1003=>activo",
+  "Actualiza toda la columna estado a activo en clientes",
   "Reemplaza en clientes el valor inactivo por activo en estado",
   "Vaciar columna observacion en clientes",
   "Reordena columnas de clientes: id, nombre, ciudad, estado",

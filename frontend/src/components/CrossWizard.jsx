@@ -92,6 +92,9 @@ export default function CrossWizard({ tables, onClose, onResult }) {
   const [aggOp,        setAggOp]        = useState('none')
   const [aggCol,       setAggCol]       = useState('')
   const [groupBy,      setGroupBy]      = useState('')
+  const [postAction,   setPostAction]   = useState('only_result')
+  const [targetTable,  setTargetTable]  = useState('')
+  const [newTableName, setNewTableName] = useState('resultado_cruce')
   const [isRunning,    setIsRunning]    = useState(false)
   const [error,        setError]        = useState(null)
 
@@ -115,13 +118,19 @@ export default function CrossWizard({ tables, onClose, onResult }) {
     setAggCol(numericRightCols[0]?.name || '')
   }, [leftTable, rightTable])
 
+  useEffect(() => {
+    if (!targetTable && leftTable) setTargetTable(leftTable)
+  }, [leftTable, targetTable])
+
   const sqlPreview = useMemo(
     () => buildSQL({ leftTable, rightTable, joinCol, rightJoinCol, joinType, aggOp, aggCol, groupBy }),
     [leftTable, rightTable, joinCol, rightJoinCol, joinType, aggOp, aggCol, groupBy]
   )
 
   const needsAggCol = ['sum','avg','both'].includes(aggOp)
-  const canExecute  = leftTable && rightTable && leftTable !== rightTable && joinCol && rightJoinCol && (!needsAggCol || aggCol)
+  const needsTarget = postAction === 'replace_main'
+  const needsName = postAction === 'new_tab' || postAction === 'new_file'
+  const canExecute  = leftTable && rightTable && leftTable !== rightTable && joinCol && rightJoinCol && (!needsAggCol || aggCol) && (!needsTarget || targetTable) && (!needsName || newTableName.trim())
 
   async function handleExecute() {
     if (!canExecute || !sqlPreview) return
@@ -138,6 +147,9 @@ export default function CrossWizard({ tables, onClose, onResult }) {
         sql: sqlPreview,
         rowCount: res.rowCount,
         limited: res.rowCount >= MAX_JOIN_ROWS,
+        postAction,
+        targetTable,
+        newTableName: newTableName.trim(),
       }
       if (onResult) onResult({ ...res, duration: '—', crossContext })
       onClose()
@@ -228,6 +240,53 @@ export default function CrossWizard({ tables, onClose, onResult }) {
                 </div>
               ))}
             </div>
+          </Section>
+
+          {/* 5 · Qué hacer con el resultado */}
+          <Section num="5" title="¿Qué hacer con el resultado del cruce?">
+            <div className="grid grid-cols-1 gap-2">
+              {[
+                { key: 'only_result', title: 'Solo mostrar resultado', desc: 'Mostrar en panel de resultados sin guardar cambios' },
+                { key: 'replace_main', title: 'Actualizar archivo principal', desc: 'Reemplazar el archivo seleccionado con el resultado del cruce' },
+                { key: 'new_tab', title: 'Agregar en pestaña nueva', desc: 'Crear una tabla nueva dentro del proyecto actual' },
+                { key: 'new_file', title: 'Crear archivo diferente', desc: 'Crear una tabla diferente para trabajar por separado' },
+              ].map(opt => {
+                const sel = postAction === opt.key
+                return (
+                  <motion.button
+                    key={opt.key}
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => setPostAction(opt.key)}
+                    className="text-left px-3 py-2.5 rounded-lg text-xs transition-all"
+                    style={sel ? cardActive : cardIdle}
+                  >
+                    <div className="font-bold" style={{ color: sel ? G.dark : G.text }}>{opt.title}</div>
+                    <div style={{ color: G.dim }} className="mt-0.5">{opt.desc}</div>
+                  </motion.button>
+                )
+              })}
+            </div>
+            {postAction === 'replace_main' && (
+              <div className="mt-3">
+                <p className="text-[10px] mb-1.5 font-semibold" style={{ color: G.dim }}>Archivo principal a actualizar</p>
+                <select value={targetTable} onChange={e => setTargetTable(e.target.value)} style={selectSt}>
+                  <option value="">— Selecciona archivo —</option>
+                  {tables.map(t => <option key={t.name} value={t.name}>{t.name}</option>)}
+                </select>
+              </div>
+            )}
+            {(postAction === 'new_tab' || postAction === 'new_file') && (
+              <div className="mt-3">
+                <p className="text-[10px] mb-1.5 font-semibold" style={{ color: G.dim }}>Nombre de la nueva tabla</p>
+                <input
+                  value={newTableName}
+                  onChange={e => setNewTableName(e.target.value)}
+                  placeholder="resultado_cruce"
+                  style={selectSt}
+                />
+              </div>
+            )}
           </Section>
 
           {/* 2 · Columnas */}
@@ -343,7 +402,7 @@ export default function CrossWizard({ tables, onClose, onResult }) {
               <span style={{ color: G.primary, fontSize: '1rem', lineHeight: 1 }}>ℹ</span>
               <span style={{ color: G.text2 }}>
                 Los resultados aparecerán en el área principal con un resumen detallado del cruce.
-                Desde allí podrás <strong>exportar CSV/Excel</strong> o usar <strong>Construir archivo</strong> para crear una nueva versión.
+                Además, con el paso 5 puedes decidir si el resultado solo se muestra, actualiza un archivo principal o crea una nueva tabla.
               </span>
             </div>
           )}

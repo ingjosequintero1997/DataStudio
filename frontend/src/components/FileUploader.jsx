@@ -17,13 +17,14 @@ function isExcel(filename) {
 }
 
 function sanitizeName(filename) {
-  return filename
+  const clean = filename
     .replace(/\.(csv|txt|xlsx?|xlsm|xlsb)$/i, '')
     .replace(/[^a-zA-Z0-9_]/g, '_')
     .replace(/^(\d)/, '_$1')
+  return clean || 'tabla_cargada'
 }
 
-async function convertToCSV(file) {
+async function getUploadBuffer(file) {
   const buffer = await file.arrayBuffer()
   if (isExcel(file.name)) {
     const wb = XLSX.read(buffer, { type: 'array', cellDates: true, dense: true })
@@ -36,15 +37,15 @@ async function convertToCSV(file) {
       csv = csv.replace(/^\uFEFF/, '')
       // Check the CSV actually has rows with content
       const lines = csv.split('\n').filter(l => l.trim().replace(/,/g,'') !== '')
-      if (lines.length > 1) return csv
+      if (lines.length > 1) return new Blob([csv], { type: 'text/csv' }).arrayBuffer()
     }
     // Fallback: return first sheet anyway
     const sheet = wb.Sheets[wb.SheetNames[0]]
-    return XLSX.utils.sheet_to_csv(sheet, { strip: true }).replace(/^\uFEFF/, '')
+    const csv = XLSX.utils.sheet_to_csv(sheet, { strip: true }).replace(/^\uFEFF/, '')
+    return new Blob([csv], { type: 'text/csv' }).arrayBuffer()
   }
-  // TXT / CSV: decode respecting BOM
-  const text = new TextDecoder('utf-8').decode(buffer)
-  return text.replace(/^\uFEFF/, '')
+  // CSV / TXT: keep original bytes to avoid encoding corruption.
+  return buffer
 }
 
 function formatBytes(bytes) {
@@ -98,9 +99,10 @@ export default function FileUploader({ onClose, onTableLoaded, setStatusMessage 
       }
 
       setStatusMessage(`Leyendo "${entry.file.name}"...`)
-      const csvText = await convertToCSV(entry.file)
-      const csvBlob = new Blob([csvText], { type: 'text/csv' })
-      const rawBuffer = await csvBlob.arrayBuffer()
+      const rawBuffer = await getUploadBuffer(entry.file)
+      if (!rawBuffer || rawBuffer.byteLength === 0) {
+        throw new Error('El archivo esta vacio o no se pudo leer.')
+      }
       // Copy before DuckDB-Wasm transfers/detaches the ArrayBuffer
       const bufferForIDB = rawBuffer.slice(0)
       updateEntry(idx, { progress: 20 })

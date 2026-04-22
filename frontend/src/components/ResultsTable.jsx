@@ -31,7 +31,7 @@ const AGG_LABELS = {
 }
 
 /* ─ Banner que resume el cruce ejecutado ─────────────────────────────── */
-function CrossBanner({ ctx, onExport, onExportExcel, onOpenBuilder }) {
+function CrossBanner({ ctx, onExport, onExportExcel }) {
   if (!ctx) return null
   return (
     <div style={{ background: G.light, borderBottom: `1px solid ${G.border}`, padding: '10px 16px', flexShrink: 0 }}>
@@ -49,10 +49,6 @@ function CrossBanner({ ctx, onExport, onExportExcel, onOpenBuilder }) {
           )}
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
-          <button onClick={onOpenBuilder} disabled={!onOpenBuilder}
-            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 12px', borderRadius: 7, border: `1px solid ${G.primary}`, background: '#fff', color: G.dark, fontFamily: 'Inter,sans-serif', fontSize: '0.75rem', fontWeight: 600, cursor: onOpenBuilder ? 'pointer' : 'not-allowed', opacity: onOpenBuilder ? 1 : 0.5 }}>
-            🧩 Construir archivo
-          </button>
           <button onClick={onExport}
             style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 12px', borderRadius: 7, border: `1px solid ${G.primary}`, background: '#fff', color: G.dark, fontFamily: 'Inter,sans-serif', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer' }}>
             ⬇ Exportar CSV
@@ -105,7 +101,7 @@ function CellValue({ value }) {
   return <span className="truncate">{str}</span>
 }
 
-export default function ResultsTable({ result, error, isExecuting, visibleColumns, onExport, onExportExcel, onOpenBuilder, onClear }) {
+export default function ResultsTable({ result, error, isExecuting, visibleColumns, onExport, onExportExcel, onClear }) {
   const displayColumns = visibleColumns?.length ? visibleColumns : (result?.columns || [])
 
   const colWidths = useMemo(() => {
@@ -206,7 +202,7 @@ export default function ResultsTable({ result, error, isExecuting, visibleColumn
   return (
     <div className="flex flex-col h-full" style={{ background: '#fff' }}>
       <TabBar rowCount={rowCount} duration={duration} hasCross={!!crossContext} canClear onClear={onClear} />
-      <CrossBanner ctx={crossContext} onExport={onExport} onExportExcel={onExportExcel} onOpenBuilder={onOpenBuilder} />
+      <CrossBanner ctx={crossContext} onExport={onExport} onExportExcel={onExportExcel} />
       <div className="flex-1 overflow-hidden">
         <AutoSizer>
           {({ width, height }) => {
