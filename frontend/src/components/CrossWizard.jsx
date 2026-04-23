@@ -33,6 +33,11 @@ const AGG_OPS = [
   { value: 'both',  label: 'Suma + Promedio',      desc: 'Suma y promedio de la columna',      icon: '📊' },
 ]
 
+const JOIN_MODES = [
+  { value: 'join_columns', label: 'Cruzar por columnas', desc: 'Usar una columna de enlace común', icon: '🔗' },
+  { value: 'cross_all',    label: 'Cruzar todo',        desc: 'Producto cartesiano de todos los registros', icon: '✕' },
+]
+
 const MAX_JOIN_ROWS = 50000
 
 function buildJoinProjection(leftTable, rightTable, leftCols, rightCols, joinCol, rightJoinCol) {
@@ -42,8 +47,25 @@ function buildJoinProjection(leftTable, rightTable, leftCols, rightCols, joinCol
   return [matchFlag, ...leftProjection, ...rightProjection].join(',\n       ')
 }
 
-function buildSQL({ leftTable, rightTable, leftCols, rightCols, joinCol, rightJoinCol, joinType, aggOp, aggCol, groupBy }) {
-  if (!leftTable || !rightTable || !joinCol || !rightJoinCol) return null
+function buildSQL({ leftTable, rightTable, leftCols, rightCols, joinCol, rightJoinCol, joinType, aggOp, aggCol, groupBy, joinMode = 'join_columns' }) {
+  if (!leftTable || !rightTable) return null
+  
+  // ── CROSS JOIN (cruzar todo sin columnas de enlace) ──
+  if (joinMode === 'cross_all') {
+    const al = 'a', ar = 'b'
+    const leftProjection = (leftCols || []).map((col) => `${al}."${col.name}" AS "${leftTable}.${col.name}"`)
+    const rightProjection = (rightCols || []).map((col) => `${ar}."${col.name}" AS "${rightTable}.${col.name}"`)
+    const projection = [...leftProjection, ...rightProjection].join(',\n       ')
+    return (
+      `SELECT ${projection}\n` +
+      `FROM "${leftTable}" ${al}\n` +
+      `CROSS JOIN "${rightTable}" ${ar}\n` +
+      `LIMIT ${MAX_JOIN_ROWS};`
+    )
+  }
+  
+  // ── JOIN CON COLUMNAS (modo normal) ──
+  if (!joinCol || !rightJoinCol) return null
   const al = 'a', ar = 'b'
 
   if (aggOp === 'none') {
@@ -93,6 +115,7 @@ function Section({ num, title, children }) {
 export default function CrossWizard({ tables, onClose, onResult }) {
   const [leftTable,    setLeftTable]    = useState(tables[0]?.name || '')
   const [rightTable,   setRightTable]   = useState(tables[1]?.name || '')
+  const [joinMode,     setJoinMode]     = useState('join_columns')
   const [joinCol,      setJoinCol]      = useState('')
   const [rightJoinCol, setRightJoinCol] = useState('')
   const [joinType,     setJoinType]     = useState('LEFT JOIN')
@@ -104,6 +127,7 @@ export default function CrossWizard({ tables, onClose, onResult }) {
   const [newTableName, setNewTableName] = useState('resultado_cruce')
   const [isRunning,    setIsRunning]    = useState(false)
   const [error,        setError]        = useState(null)
+  const [warnings,     setWarnings]     = useState([])
 
   const leftMeta  = tables.find(t => t.name === leftTable)
   const rightMeta = tables.find(t => t.name === rightTable)
@@ -115,29 +139,54 @@ export default function CrossWizard({ tables, onClose, onResult }) {
   })
 
   useEffect(() => {
-    if (!leftCols.length || !rightCols.length) return
-    const common = leftCols.find(c => rightCols.some(rc => rc.name.toLowerCase() === c.name.toLowerCase()))
-    if (common) {
-      setJoinCol(common.name)
-      const rMatch = rightCols.find(rc => rc.name.toLowerCase() === common.name.toLowerCase())
-      setRightJoinCol(rMatch?.name || '')
-    } else { setJoinCol(''); setRightJoinCol('') }
+    const w = []
+    
+    // Detectar si tablas son muy grandes
+    if ((leftMeta?.rowCount || 0) > 100000) w.push('⚠️ Archivo A es muy grande. Considera usar INNER JOIN para reducir filas.')
+    if ((rightMeta?.rowCount || 0) > 100000) w.push('⚠️ Archivo B es muy grande. Considera usar INNER JOIN para reducir filas.')
+    
+    // Advertencia para CROSS JOIN
+    if (joinMode === 'cross_all') {
+      const totalRows = (leftMeta?.rowCount || 0) * (rightMeta?.rowCount || 0)
+      if (totalRows > MAX_JOIN_ROWS) w.push(`⚠️ CROSS JOIN generaría ${totalRows.toLocaleString()} filas (límite: ${MAX_JOIN_ROWS.toLocaleString()}). Resultado limitado.`)
+      if (totalRows > 1000000) w.push('🔴 CROSS JOIN de archivos muy grandes puede fallar por memoria.')
+    }
+    
+    setWarnings(w)
+    
+    // Auto-detectar columnas comunes en modo join_columns
+    if (joinMode === 'join_columns' && (!joinCol || !rightJoinCol)) {
+      if (!leftCols.length || !rightCols.length) return
+      const common = leftCols.find(c => rightCols.some(rc => rc.name.toLowerCase() === c.name.toLowerCase()))
+      if (common) {
+        setJoinCol(common.name)
+        const rMatch = rightCols.find(rc => rc.name.toLowerCase() === common.name.toLowerCase())
+        setRightJoinCol(rMatch?.name || '')
+      }
+    }
+    
     setAggCol(numericRightCols[0]?.name || '')
-  }, [leftTable, rightTable])
+  }, [leftTable, rightTable, joinMode, leftCols, rightCols, numericRightCols, leftMeta?.rowCount, rightMeta?.rowCount])
 
   useEffect(() => {
     setTargetTable(leftTable || '')
   }, [leftTable])
 
   const sqlPreview = useMemo(
-    () => buildSQL({ leftTable, rightTable, leftCols, rightCols, joinCol, rightJoinCol, joinType, aggOp, aggCol, groupBy }),
-    [leftTable, rightTable, leftCols, rightCols, joinCol, rightJoinCol, joinType, aggOp, aggCol, groupBy]
+    () => buildSQL({ leftTable, rightTable, leftCols, rightCols, joinCol, rightJoinCol, joinType, aggOp, aggCol, groupBy, joinMode }),
+    [leftTable, rightTable, leftCols, rightCols, joinCol, rightJoinCol, joinType, aggOp, aggCol, groupBy, joinMode]
   )
 
   const needsAggCol = ['sum','avg','both'].includes(aggOp)
   const needsTarget = postAction === 'replace_main'
   const needsName = postAction === 'new_tab' || postAction === 'new_file'
-  const canExecute  = leftTable && rightTable && leftTable !== rightTable && joinCol && rightJoinCol && (!needsAggCol || aggCol) && (!needsTarget || targetTable) && (!needsName || newTableName.trim())
+  
+  const canExecute = 
+    leftTable && rightTable && leftTable !== rightTable && 
+    (joinMode === 'cross_all' || (joinCol && rightJoinCol)) &&
+    (!needsAggCol || aggCol) && 
+    (!needsTarget || targetTable) && 
+    (!needsName || newTableName.trim())
 
   async function handleExecute() {
     if (!canExecute || !sqlPreview) return
@@ -145,13 +194,22 @@ export default function CrossWizard({ tables, onClose, onResult }) {
     setError(null)
     try {
       const res = await executeQuery(sqlPreview)
+      
+      if (!res || !res.rows) {
+        setError('Error: Respuesta inválida del motor de base de datos.')
+        setIsRunning(false)
+        return
+      }
+      
       const stats = (res.rows || []).reduce((acc, row) => {
         if (row.estado_cruce === 'coincide') acc.matched += 1
         else if (row.estado_cruce === 'sin_coincidencia') acc.unmatched += 1
         return acc
       }, { matched: 0, unmatched: 0 })
+      
       const joinLabel = JOIN_TYPES.find(j => j.value === joinType)?.label || joinType
       const aggLabel  = AGG_OPS.find(a  => a.value === aggOp)?.label  || aggOp
+      
       const crossContext = {
         leftTable, rightTable, joinCol, rightJoinCol,
         joinType, joinLabel, aggOp, aggLabel,
@@ -164,15 +222,23 @@ export default function CrossWizard({ tables, onClose, onResult }) {
         postAction,
         targetTable,
         newTableName: newTableName.trim(),
+        joinMode,
       }
+      
       if (onResult) onResult({ ...res, duration: '—', crossContext })
       onClose()
     } catch (e) {
       const msg = e.message || String(e)
+      console.error('[CrossWizard Error]', msg, e)
+      
       if (msg.includes('malloc') || msg.includes('Out of Memory') || msg.toLowerCase().includes('oom')) {
-        setError(`Los archivos son demasiado grandes para cruzarlos directamente.\n\nSugerencias:\n• Usa "Intersección" (INNER JOIN) para reducir resultados\n• Limita los registros antes del cruce`)
+        setError(`Los archivos son demasiado grandes para cruzarlos directamente.\n\nSugerencias:\n• Usa "Intersección" (INNER JOIN) para reducir resultados\n• Limita los registros antes del cruce\n• Usa CROSS JOIN solo si es necesario`)
+      } else if (msg.includes('Column name not found') || msg.includes('column does not exist')) {
+        setError('❌ Columna no encontrada. Verifica que las columnas de enlace existan en ambos archivos.')
+      } else if (msg.includes('Catalog Error')) {
+        setError('❌ Error de tabla. Verifica que los archivos no hayan sido eliminados.')
       } else {
-        setError('Error al ejecutar el cruce: ' + msg)
+        setError('Error al ejecutar el cruce:\n' + msg.slice(0, 150) + (msg.length > 150 ? '...' : ''))
       }
     } finally {
       setIsRunning(false)
@@ -256,28 +322,50 @@ export default function CrossWizard({ tables, onClose, onResult }) {
             </div>
           </Section>
 
-          {/* 2 · Columnas */}
-          <Section num="2" title="Columna de enlace">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <p className="text-[10px] mb-1.5 font-semibold" style={{ color: G.dim }}>Columna de A ({leftTable})</p>
-                <select value={joinCol} onChange={e => setJoinCol(e.target.value)} style={selectSt}>
-                  <option value="">— Elige columna —</option>
-                  {leftCols.map(c => <option key={c.name} value={c.name}>{c.name} ({c.type})</option>)}
-                </select>
-              </div>
-              <div>
-                <p className="text-[10px] mb-1.5 font-semibold" style={{ color: G.dim }}>Columna de B ({rightTable})</p>
-                <select value={rightJoinCol} onChange={e => setRightJoinCol(e.target.value)} style={selectSt}>
-                  <option value="">— Elige columna —</option>
-                  {rightCols.map(c => <option key={c.name} value={c.name}>{c.name} ({c.type})</option>)}
-                </select>
-              </div>
+          {/* 2 · Modo de cruce */}
+          <Section num="2" title="¿Cómo cruzar?">
+            <div className="grid grid-cols-2 gap-2">
+              {JOIN_MODES.map(mode => {
+                const sel = joinMode === mode.value
+                return (
+                  <motion.button key={mode.value} whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
+                    onClick={() => setJoinMode(mode.value)}
+                    className="text-left px-3 py-2.5 rounded-lg text-xs transition-all"
+                    style={sel ? cardActive : cardIdle}>
+                    <div className="text-base mb-0.5">{mode.icon}</div>
+                    <div className="font-bold leading-tight" style={{ color: sel ? G.dark : G.text }}>{mode.label}</div>
+                    <div className="mt-0.5 leading-snug" style={{ color: G.dim }}>{mode.desc}</div>
+                  </motion.button>
+                )
+              })}
             </div>
           </Section>
 
-          {/* 3 · Tipo de JOIN */}
-          <Section num="3" title="Tipo de cruce">
+          {/* 3 · Columnas (solo si no es CROSS JOIN) */}
+          {joinMode === 'join_columns' && (
+            <Section num="3" title="Columna de enlace">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <p className="text-[10px] mb-1.5 font-semibold" style={{ color: G.dim }}>Columna de A ({leftTable})</p>
+                  <select value={joinCol} onChange={e => setJoinCol(e.target.value)} style={selectSt}>
+                    <option value="">— Elige columna —</option>
+                    {leftCols.map(c => <option key={c.name} value={c.name}>{c.name} ({c.type})</option>)}
+                  </select>
+                </div>
+                <div>
+                  <p className="text-[10px] mb-1.5 font-semibold" style={{ color: G.dim }}>Columna de B ({rightTable})</p>
+                  <select value={rightJoinCol} onChange={e => setRightJoinCol(e.target.value)} style={selectSt}>
+                    <option value="">— Elige columna —</option>
+                    {rightCols.map(c => <option key={c.name} value={c.name}>{c.name} ({c.type})</option>)}
+                  </select>
+                </div>
+              </div>
+            </Section>
+          )}
+
+          {/* 4 · Tipo de JOIN (solo si no es CROSS) */}
+          {joinMode === 'join_columns' && (
+          <Section num="4" title="Tipo de cruce">
             <div className="grid grid-cols-2 gap-2">
               {JOIN_TYPES.map(jt => {
                 const sel = joinType === jt.value
@@ -294,9 +382,10 @@ export default function CrossWizard({ tables, onClose, onResult }) {
               })}
             </div>
           </Section>
+          )}
 
-          {/* 4 · Qué calcular */}
-          <Section num="4" title="¿Qué calcular?">
+          {/* 5 · Qué calcular */}
+          <Section num={joinMode === 'join_columns' ? '5' : '4'} title="¿Qué calcular?">
             <div className="grid grid-cols-3 gap-2">
               {AGG_OPS.map(op => {
                 const sel = aggOp === op.value
@@ -339,8 +428,8 @@ export default function CrossWizard({ tables, onClose, onResult }) {
             </AnimatePresence>
           </Section>
 
-          {/* 5 · Qué hacer con el resultado */}
-          <Section num="5" title="¿Qué hacer con el resultado del cruce?">
+          {/* 6 · Qué hacer con el resultado */}
+          <Section num={joinMode === 'join_columns' ? '6' : '5'} title="¿Qué hacer con el resultado del cruce?">
             <div className="grid grid-cols-1 gap-2">
               {[
                 { key: 'only_result', title: 'Solo mostrar resultado', desc: 'Mostrar en panel de resultados sin guardar cambios' },
@@ -385,6 +474,20 @@ export default function CrossWizard({ tables, onClose, onResult }) {
               </div>
             )}
           </Section>
+
+          {/* Advertencias */}
+          <AnimatePresence>
+            {warnings.map((w, i) => (
+              <motion.div key={i}
+                initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="rounded-lg px-4 py-2.5 text-xs flex items-start gap-2"
+                style={{ background: '#FFF8E1', border: '1px solid #FFE082', color: '#F57F17' }}>
+                <span style={{ fontSize: '1.1rem', lineHeight: 1 }}>⚠️</span>
+                <span style={{ lineHeight: '1.5' }}>{w}</span>
+              </motion.div>
+            ))}
+          </AnimatePresence>
 
           {/* SQL Preview */}
           {sqlPreview && (

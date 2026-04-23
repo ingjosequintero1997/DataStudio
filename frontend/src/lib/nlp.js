@@ -77,6 +77,7 @@ function buildJoinProjection(leftTable, rightTable, leftCols, rightCols, leftJoi
 export function parseCommand(input, tables) {
   if (!input?.trim()) return { error: "Escribe una consulta para comenzar." }
   if (!tables?.length) return { error: "No hay tablas cargadas. Primero carga un archivo." }
+  
   const rawInput = input.trim()
   const raw = rawInput.replace(/\[([^\]]+)\]/g, '$1').trim()
   const norm = normalize(raw)
@@ -86,24 +87,54 @@ export function parseCommand(input, tables) {
     return { sql: raw.endsWith(";") ? raw : raw + ";", action: "query", description: "Consulta SQL personalizada", isDML: /^(update|delete|alter)/i.test(raw) }
   }
 
-  // ── CRUZAR / JOIN ────────────────────────────────────────────────────────
+  // ── CRUZAR / JOIN con validación robusta ─────────────────────────────────
   if (/(cruza|cruzar|join|relaciona|combina|enlaza|mezcla)/.test(norm)) {
     const pair = extractTwoTables(norm, tables)
-    if (pair.length < 2) return { error: `Necesito dos tablas. Disponibles: ${tables.map(t=>`"${t.name}"`).join(", ")}` }
+    if (pair.length < 2) {
+      return { 
+        error: `Necesito dos tablas distintas. Disponibles: ${tables.map(t=>`"${t.name}" (${t.rowCount?.toLocaleString()} filas)`).join(", ")}`
+      }
+    }
+    
     const [t1, t2] = pair
     const cols1 = tables.find(t=>t.name===t1)?.columns||[]
     const cols2 = tables.find(t=>t.name===t2)?.columns||[]
+    
+    // Detectar si es CROSS JOIN
+    if (/(cruzar todo|cruzar.*todo|producto cartesiano|cross)/.test(norm)) {
+      const totalRows = (tables.find(t=>t.name===t1)?.rowCount || 0) * (tables.find(t=>t.name===t2)?.rowCount || 0)
+      let warning = ''
+      if (totalRows > MAX_JOIN_ROWS) {
+        warning = `⚠️ CROSS JOIN generaría ~${Math.min(totalRows, MAX_JOIN_ROWS).toLocaleString()} filas (limitado a ${MAX_JOIN_ROWS.toLocaleString()})`
+      }
+      const leftProjection = (cols1 || []).map((col) => `a."${col.name}" AS "${t1}.${col.name}"`)
+      const rightProjection = (cols2 || []).map((col) => `b."${col.name}" AS "${t2}.${col.name}"`)
+      const projection = [...leftProjection, ...rightProjection].join(',\n       ')
+      const sql = `SELECT ${projection}\nFROM "${t1}" a\nCROSS JOIN "${t2}" b\nLIMIT ${MAX_JOIN_ROWS};`
+      return { sql, action:"query", description:`CROSS JOIN de "${t1}" y "${t2}"`, warning }
+    }
+    
+    // JOIN normal con columnas
     const common = cols1.find(c => cols2.some(c2 => normalize(c2.name)===normalize(c.name)))
     let joinCol = null
     const byM = norm.match(/(?:por|usando|con el campo|con la columna|by|en)\s+(.{1,40})$/)
-    if (byM) { const c = findColumn(byM[1],cols1)||findColumn(byM[1],cols2); if(c) joinCol=c.name }
+    if (byM) { 
+      const c = findColumn(byM[1],cols1)||findColumn(byM[1],cols2)
+      if(c) joinCol=c.name 
+    }
     if (!joinCol && common) joinCol = common.name
-    if (!joinCol) return { error: `No hay columna común entre "${t1}" y "${t2}". Escribe: "Cruza ${t1} con ${t2} por [columna]"` }
+    if (!joinCol) {
+      return { 
+        error: `No hay columna común entre "${t1}" y "${t2}".\nColumnas en ${t1}: ${cols1.map(c => `"${c.name}"`).join(", ")}\nColumnas en ${t2}: ${cols2.map(c => `"${c.name}"`).join(", ")}\n\nEscribe: "Cruza ${t1} con ${t2} por [columna_comun]"` 
+      }
+    }
+    
     const rightJoinCol = (findColumn(byM?.[1] || joinCol, cols2)?.name) || joinCol
     let joinType = "LEFT JOIN"
-    if (/(inner|solo.*coincide|solo.*comun)/.test(norm)) joinType="INNER JOIN"
+    if (/(inner|solo.*coincide|solo.*comun|interseccion|interior)/.test(norm)) joinType="INNER JOIN"
     else if (/(full|completo|outer|todos.*ambos)/.test(norm)) joinType="FULL OUTER JOIN"
     else if (/(right|derecha)/.test(norm)) joinType="RIGHT JOIN"
+    
     const projection = buildJoinProjection(t1, t2, cols1, cols2, joinCol, rightJoinCol)
     const sql = `SELECT ${projection}\nFROM "${t1}" a\n${joinType} "${t2}" b\n  ON TRIM(CAST(a."${joinCol}" AS VARCHAR)) = TRIM(CAST(b."${rightJoinCol}" AS VARCHAR))\nLIMIT ${MAX_JOIN_ROWS};`
     return { sql, action:"query", description:`${joinType} de "${t1}" y "${t2}" por "${joinCol}"` }
@@ -509,6 +540,7 @@ export function parseCommand(input, tables) {
 
 export const EXAMPLE_COMMANDS = [
   "Cruza ventas con precios por ID_producto",
+  "Cruzar todo clientes con pedidos",
   "Dame el último registro de la columna fecha",
   "Busca en clientes donde ciudad sea Caracas",
   "Actualiza empleados pon salario a 5000 donde nombre sea Juan",
@@ -523,5 +555,12 @@ export const EXAMPLE_COMMANDS = [
   "Estadísticas de ventas",
   "Ordena empleados por salario de mayor a menor",
   "Consolida enero con febrero",
+  "Valores únicos de departamento en empleados",
+  "Promedio de ventas por ciudad",
+  "Busca nulos en tabla clientes",
+  "Contar registros totales de pedidos",
   "Exporta el resultado actual",
+  "Máximo valor de la columna monto",
+  "Mínimo de precio agrupado por categoría",
+  "Suma total de ventas por mes",
 ]
