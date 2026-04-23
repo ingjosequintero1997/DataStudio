@@ -415,7 +415,9 @@ export default function Layout({ user }) {
         <div ref={containerRef} className="flex flex-col flex-1 overflow-hidden min-w-0">
           <div style={{ height: editorHeight + '%' }} className="flex flex-col overflow-hidden">
             <CommandBar onExecute={handleExecuteCommand} isExecuting={isExecuting}
-              injectedValue={injectedCommand} onClear={() => setInjectedCommand(null)} />
+              injectedValue={injectedCommand} onClear={() => setInjectedCommand(null)} 
+              onShowKnowledgeBase={() => setShowKnowledgeBase(true)}
+              tables={tables} />
           </div>
           <div className="resize-handle-y shrink-0" onMouseDown={onMouseDownY} />
           <div className="flex flex-col flex-1 overflow-hidden">
@@ -459,7 +461,8 @@ export default function Layout({ user }) {
 
       {showUploader && (
         <FileUploader onClose={() => setShowUploader(false)}
-          onTableLoaded={handleTableLoaded} setStatusMessage={setStatusMessage} />
+          onTableLoaded={handleTableLoaded} setStatusMessage={setStatusMessage}
+          onNewQuery={() => setShowUploader(false)} />
       )}
 
       <AnimatePresence>
@@ -486,6 +489,7 @@ export default function Layout({ user }) {
             onClose={() => setShowKnowledgeBase(false)}
             addToast={addToast}
             onUseCommand={(cmd) => setInjectedCommand(cmd)}
+            tables={tables}
           />
         )}
       </AnimatePresence>

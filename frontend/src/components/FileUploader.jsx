@@ -78,7 +78,7 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export default function FileUploader({ onClose, onTableLoaded, setStatusMessage }) {
+export default function FileUploader({ onClose, onTableLoaded, setStatusMessage, onNewQuery }) {
   const [files, setFiles] = useState([]) // { file, tableName, status, progress, error, result }
   const [dragging, setDragging] = useState(false)
   const fileInputRef = useRef(null)
@@ -194,11 +194,23 @@ export default function FileUploader({ onClose, onTableLoaded, setStatusMessage 
             </div>
             <span className="text-sm font-semibold" style={{ color: '#e2e8f0' }}>Cargar archivos</span>
           </div>
-          <motion.button onClick={onClose} whileHover={{ scale: 1.15 }} whileTap={{ scale: 0.9 }} style={{ color: '#475569' }}>
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </motion.button>
+          <div className="flex items-center gap-2">
+            <motion.button 
+              onClick={onNewQuery}
+              whileHover={{ scale: 1.05 }} 
+              whileTap={{ scale: 0.95 }} 
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+              style={{ background: 'rgba(0,120,212,0.2)', color: '#60a5fa', border: '1px solid rgba(0,120,212,0.3)' }}
+              title="Nueva consulta en lenguaje natural"
+            >
+              ➕ Nueva consulta
+            </motion.button>
+            <motion.button onClick={onClose} whileHover={{ scale: 1.15 }} whileTap={{ scale: 0.9 }} style={{ color: '#475569' }}>
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </motion.button>
+          </div>
         </div>
 
         {/* Drop zone */}

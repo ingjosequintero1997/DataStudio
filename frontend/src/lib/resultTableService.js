@@ -29,7 +29,9 @@ export async function saveResultAsTable(tableName, result) {
   const buffer = csvToArrayBuffer(csv)
   const cols = await registerCSVAsTable(name, buffer)
   const sizeBytes = buffer.byteLength
-  await saveTable(name, buffer.slice(0), cols, result.rowCount, sizeBytes)
+  // Crear una copia del buffer para IndexedDB usando Uint8Array
+  const bufferCopy = new Uint8Array(buffer).buffer
+  await saveTable(name, bufferCopy, cols, result.rowCount, sizeBytes)
   return {
     name,
     columns: cols,

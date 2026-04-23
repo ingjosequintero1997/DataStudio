@@ -11,17 +11,33 @@ import {
 
 const spring = { type: 'spring', stiffness: 360, damping: 28 }
 
-export default function KnowledgeBaseModal({ open, onClose, userEmail, onUseCommand, addToast }) {
+// Detectar placeholders en el texto
+function detectPlaceholders(text) {
+  const tableMatches = (text.match(/\[tabla\]|\[tabla_\w+\]/gi) || []).map(m => m.toLowerCase())
+  const columnMatches = (text.match(/\[columna\]|\[columna_\w+\]/gi) || []).map(m => m.toLowerCase())
+  return { hasTable: tableMatches.length > 0, hasColumn: columnMatches.length > 0, tableMatches, columnMatches }
+}
+
+export default function KnowledgeBaseModal({ open, onClose, userEmail, onUseCommand, addToast, tables = [] }) {
   const [items, setItems] = useState([])
   const [search, setSearch] = useState('')
   const [newText, setNewText] = useState('')
+  const [newSelectedTable, setNewSelectedTable] = useState('')
+  const [newSelectedColumn, setNewSelectedColumn] = useState('')
   const [editingId, setEditingId] = useState('')
   const [editingText, setEditingText] = useState('')
+  const [editSelectedTable, setEditSelectedTable] = useState('')
+  const [editSelectedColumn, setEditSelectedColumn] = useState('')
   const [loading, setLoading] = useState(false)
   const [savingEditId, setSavingEditId] = useState('')
   const [error, setError] = useState('')
+  const [showAdvanced, setShowAdvanced] = useState(false)
 
   const isAdmin = isAdminUser(userEmail)
+  const tableMeta = tables.find(t => t.name === newSelectedTable)
+  const tableMetaEdit = tables.find(t => t.name === editSelectedTable)
+  const availableColumns = tableMeta?.columns || []
+  const availableColumnsEdit = tableMetaEdit?.columns || []
 
   useEffect(() => {
     if (!open) return
@@ -43,8 +59,13 @@ export default function KnowledgeBaseModal({ open, onClose, userEmail, onUseComm
 
   async function onAdd() {
     if (!isAdmin) return
-    const text = newText.trim()
+    let text = newText.trim()
     if (!text) return
+    
+    // Reemplazar placeholders con valores seleccionados
+    if (newSelectedTable) text = text.replace(/\[tabla\]|\[tabla_\w+\]/gi, `"${newSelectedTable}"`)
+    if (newSelectedColumn) text = text.replace(/\[columna\]|\[columna_\w+\]/gi, `"${newSelectedColumn}"`)
+    
     setLoading(true)
     try {
       const createdId = await createKnowledgeItem({
@@ -66,7 +87,10 @@ export default function KnowledgeBaseModal({ open, onClose, userEmail, onUseComm
       })
       setSearch('')
       setNewText('')
-      addToast?.('Instruccion guardada para todos los usuarios', 'success', 'Base de conocimiento')
+      setNewSelectedTable('')
+      setNewSelectedColumn('')
+      setShowAdvanced(false)
+      addToast?.('Instrucción guardada para todos los usuarios', 'success', 'Base de conocimiento')
     } catch (e) {
       addToast?.(e.message || 'No se pudo guardar', 'error', 'Base de conocimiento')
     } finally {
@@ -79,20 +103,29 @@ export default function KnowledgeBaseModal({ open, onClose, userEmail, onUseComm
     if (item.id.startsWith('default-')) return
     setEditingId(item.id)
     setEditingText(item.text || '')
+    setEditSelectedTable('')
+    setEditSelectedColumn('')
   }
 
   function onEditCancel() {
     setEditingId('')
     setEditingText('')
+    setEditSelectedTable('')
+    setEditSelectedColumn('')
   }
 
   async function onEditSave(item) {
     if (!isAdmin || item.id.startsWith('default-')) return
-    const text = editingText.trim()
+    let text = editingText.trim()
     if (!text) {
-      addToast?.('La instruccion no puede estar vacia', 'error', 'Base de conocimiento')
+      addToast?.('La instrucción no puede estar vacía', 'error', 'Base de conocimiento')
       return
     }
+    
+    // Reemplazar placeholders con valores seleccionados
+    if (editSelectedTable) text = text.replace(/\[tabla\]|\[tabla_\w+\]/gi, `"${editSelectedTable}"`)
+    if (editSelectedColumn) text = text.replace(/\[columna\]|\[columna_\w+\]/gi, `"${editSelectedColumn}"`)
+    
     setSavingEditId(item.id)
     try {
       await updateKnowledgeItem({
@@ -119,7 +152,8 @@ export default function KnowledgeBaseModal({ open, onClose, userEmail, onUseComm
     if (!isAdmin || id.startsWith('default-')) return
     try {
       await removeKnowledgeItem(id, userEmail)
-      addToast?.('Instruccion eliminada', 'info', 'Base de conocimiento')
+      setItems(prev => prev.filter(i => i.id !== id))
+      addToast?.('Instrucción eliminada', 'info', 'Base de conocimiento')
     } catch (e) {
       addToast?.(e.message || 'No se pudo eliminar', 'error', 'Base de conocimiento')
     }
@@ -141,128 +175,231 @@ export default function KnowledgeBaseModal({ open, onClose, userEmail, onUseComm
         animate={{ scale: 1, y: 0, opacity: 1 }}
         exit={{ scale: 0.95, y: 18, opacity: 0 }}
         transition={spring}
-        className="w-full max-w-4xl max-h-[90vh] overflow-hidden rounded-2xl flex flex-col"
+        className="w-full max-w-5xl max-h-[92vh] overflow-hidden rounded-2xl flex flex-col"
         style={{ background: '#F4F7F4', border: '1px solid #C8DCC8' }}
       >
-        <div className="px-5 py-4 flex items-center justify-between" style={{ background: '#2E7D32' }}>
+        {/* Header */}
+        <div className="px-6 py-5 flex items-center justify-between shrink-0" style={{ background: '#2E7D32', borderRadius: '16px 16px 0 0' }}>
           <div>
-            <h3 className="text-white text-sm font-bold">Base de conocimiento</h3>
-            <p className="text-xs" style={{ color: 'rgba(255,255,255,0.75)' }}>
-              Instrucciones reutilizables para consultas en lenguaje natural
+            <h3 className="text-white text-sm font-bold">📚 Base de Conocimiento</h3>
+            <p className="text-xs" style={{ color: 'rgba(255,255,255,0.8)' }}>
+              Instrucciones reutilizables para consultas
             </p>
           </div>
-          <button onClick={onClose} className="w-8 h-8 rounded-full text-white" style={{ background: 'rgba(255,255,255,0.2)' }}>✕</button>
+          <button 
+            onClick={onClose} 
+            className="w-8 h-8 rounded-full flex items-center justify-center text-lg text-white hover:opacity-80 transition-opacity"
+            style={{ background: 'rgba(255,255,255,0.2)' }}
+          >
+            ✕
+          </button>
         </div>
 
-        <div className="p-4 border-b" style={{ borderColor: '#C8DCC8', background: '#E8F5E9' }}>
+        {/* Search bar */}
+        <div className="px-6 py-3 border-b" style={{ borderColor: '#C8DCC8', background: '#E8F5E9' }}>
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Buscar instruccion..."
-            className="w-full px-3 py-2 rounded-lg text-sm"
+            placeholder="Buscar instrucción..."
+            className="w-full px-4 py-2 rounded-lg text-sm"
             style={{ border: '1px solid #C8DCC8', background: '#fff', color: '#1B3318' }}
           />
           {error && <p className="text-xs mt-2" style={{ color: '#B91C1C' }}>{error}</p>}
         </div>
 
+        {/* Admin Section */}
         {isAdmin && (
-          <div className="p-4 border-b" style={{ borderColor: '#C8DCC8', background: '#fff' }}>
-            <label className="text-[11px] font-semibold" style={{ color: '#4A6B4A' }}>
-              Nueva instruccion global (solo admin)
-            </label>
-            <div className="flex gap-2 mt-2">
-              <input
-                value={newText}
-                onChange={(e) => setNewText(e.target.value)}
-                placeholder="Ej: Actualiza masivo clientes columna estado por id con: 1001=>activo; 1002=>inactivo"
-                className="flex-1 px-3 py-2 rounded-lg text-sm"
-                style={{ border: '1px solid #C8DCC8', background: '#FAFCFA', color: '#1B3318' }}
-              />
+          <div className="px-6 py-4 border-b" style={{ borderColor: '#C8DCC8', background: '#fff' }}>
+            <div className="mb-3 flex items-center justify-between">
+              <label className="text-xs font-bold tracking-wide" style={{ color: '#2E7D32' }}>
+                ✨ Nueva Instrucción Global (Admin)
+              </label>
               <button
-                onClick={onAdd}
-                disabled={loading || !newText.trim()}
-                className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50"
-                style={{ background: 'linear-gradient(135deg, #43A047, #2E7D32)' }}
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="text-xs font-semibold px-2 py-1 rounded"
+                style={{ color: '#43A047', background: '#E8F5E9', border: '1px solid #C8DCC8' }}
               >
-                Guardar
+                {showAdvanced ? 'Básico' : 'Avanzado'}
               </button>
             </div>
+
+            <textarea
+              value={newText}
+              onChange={(e) => setNewText(e.target.value)}
+              placeholder="Escribe tu instrucción aquí. Usa [tabla] para placeholder de tabla, [columna] para columna..."
+              className="w-full px-4 py-3 rounded-lg text-sm mb-3 resize-none"
+              rows={3}
+              style={{ border: '1px solid #C8DCC8', background: '#FAFCFA', color: '#1B3318' }}
+            />
+
+            {showAdvanced && (
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="text-xs font-semibold" style={{ color: '#4A6B4A' }}>Tabla (reemplazar [tabla])</label>
+                  <select
+                    value={newSelectedTable}
+                    onChange={(e) => {
+                      setNewSelectedTable(e.target.value)
+                      setNewSelectedColumn('')
+                    }}
+                    className="w-full mt-1 px-3 py-2 rounded-lg text-sm"
+                    style={{ border: '1px solid #C8DCC8', background: '#FAFCFA', color: '#1B3318' }}
+                  >
+                    <option value="">-- Seleccionar tabla --</option>
+                    {tables.map(t => (
+                      <option key={t.name} value={t.name}>{t.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold" style={{ color: '#4A6B4A' }}>Columna (reemplazar [columna])</label>
+                  <select
+                    value={newSelectedColumn}
+                    onChange={(e) => setNewSelectedColumn(e.target.value)}
+                    disabled={!newSelectedTable}
+                    className="w-full mt-1 px-3 py-2 rounded-lg text-sm disabled:opacity-50"
+                    style={{ border: '1px solid #C8DCC8', background: '#FAFCFA', color: '#1B3318' }}
+                  >
+                    <option value="">-- Seleccionar columna --</option>
+                    {availableColumns.map(c => (
+                      <option key={c.name} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+
+            <button
+              onClick={onAdd}
+              disabled={loading || !newText.trim()}
+              className="w-full px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50 transition-all"
+              style={{ background: 'linear-gradient(135deg, #43A047, #2E7D32)' }}
+            >
+              {loading ? 'Guardando...' : 'Guardar Instrucción'}
+            </button>
           </div>
         )}
 
-        <div className="p-4 overflow-y-auto flex-1 grid grid-cols-1 md:grid-cols-2 gap-2">
+        {/* Queries Grid */}
+        <div className="p-6 overflow-y-auto flex-1 grid grid-cols-1 lg:grid-cols-2 gap-3">
           <AnimatePresence>
-            {filtered.map((item) => (
-              <motion.div
-                key={item.id}
-                layout
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 6 }}
-                className="rounded-xl p-3"
-                style={{ background: '#fff', border: '1px solid #C8DCC8' }}
-              >
-                {editingId === item.id ? (
-                  <textarea
-                    value={editingText}
-                    onChange={(e) => setEditingText(e.target.value)}
-                    className="w-full rounded-lg p-2 text-sm"
-                    rows={4}
-                    style={{ border: '1px solid #C8DCC8', background: '#FAFCFA', color: '#1B3318', resize: 'vertical' }}
-                  />
-                ) : (
-                  <p className="text-sm leading-relaxed" style={{ color: '#1B3318' }}>{item.text}</p>
-                )}
-                <div className="mt-2 flex items-center justify-between gap-2">
-                  <span className="text-[10px]" style={{ color: '#9EBB9E' }}>{item.createdBy || 'admin'}</span>
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => { onUseCommand?.(item.text); onClose?.() }}
-                      className="px-3 py-1 rounded-md text-xs font-semibold"
-                      style={{ background: '#E8F5E9', color: '#2E7D32', border: '1px solid #C8DCC8' }}
-                    >
-                      Usar consulta
-                    </button>
-                    {editingId === item.id ? (
-                      <>
-                        <button
-                          onClick={() => onEditSave(item)}
-                          disabled={!editingText.trim() || savingEditId === item.id}
-                          className="px-2 py-1 rounded-md text-xs disabled:opacity-50"
-                          style={{ background: '#E8F5E9', color: '#2E7D32', border: '1px solid #C8DCC8' }}
-                        >
-                          Guardar
-                        </button>
-                        <button
-                          onClick={onEditCancel}
-                          className="px-2 py-1 rounded-md text-xs"
-                          style={{ background: '#F3F4F6', color: '#4B5563', border: '1px solid #D1D5DB' }}
-                        >
-                          Cancelar
-                        </button>
-                      </>
-                    ) : (
+            {filtered.length === 0 ? (
+              <div className="col-span-full flex flex-col items-center justify-center py-12 opacity-50">
+                <span className="text-3xl mb-2">📭</span>
+                <p className="text-sm">No hay instrucciones que coincidan</p>
+              </div>
+            ) : (
+              filtered.map((item) => (
+                <motion.div
+                  key={item.id}
+                  layout
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 6 }}
+                  className="rounded-xl p-4 border transition-all"
+                  style={{ background: '#fff', border: '1px solid #C8DCC8', borderLeftWidth: 4, borderLeftColor: item.tags.includes('sugerida') ? '#FFA500' : '#43A047' }}
+                >
+                  {editingId === item.id ? (
+                    <div className="space-y-3">
+                      <textarea
+                        value={editingText}
+                        onChange={(e) => setEditingText(e.target.value)}
+                        className="w-full rounded-lg p-3 text-sm resize-none"
+                        rows={4}
+                        style={{ border: '1px solid #C8DCC8', background: '#FAFCFA', color: '#1B3318' }}
+                      />
+                      {showAdvanced && (
+                        <div className="grid grid-cols-2 gap-2">
+                          <select
+                            value={editSelectedTable}
+                            onChange={(e) => {
+                              setEditSelectedTable(e.target.value)
+                              setEditSelectedColumn('')
+                            }}
+                            className="px-3 py-2 rounded-lg text-xs"
+                            style={{ border: '1px solid #C8DCC8', background: '#FAFCFA', color: '#1B3318' }}
+                          >
+                            <option value="">-- Tabla --</option>
+                            {tables.map(t => (
+                              <option key={t.name} value={t.name}>{t.name}</option>
+                            ))}
+                          </select>
+                          <select
+                            value={editSelectedColumn}
+                            onChange={(e) => setEditSelectedColumn(e.target.value)}
+                            disabled={!editSelectedTable}
+                            className="px-3 py-2 rounded-lg text-xs disabled:opacity-50"
+                            style={{ border: '1px solid #C8DCC8', background: '#FAFCFA', color: '#1B3318' }}
+                          >
+                            <option value="">-- Columna --</option>
+                            {availableColumnsEdit.map(c => (
+                              <option key={c.name} value={c.name}>{c.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-sm leading-relaxed mb-3" style={{ color: '#1B3318' }}>{item.text}</p>
+                  )}
+
+                  <div className="flex items-center justify-between gap-2 mt-3 pt-3 border-t" style={{ borderColor: '#E5EFE5' }}>
+                    <span className="text-[10px]" style={{ color: '#9EBB9E' }}>
+                      {item.tags.includes('sugerida') ? '💡 Sugerida' : `👤 ${item.createdBy}`}
+                    </span>
+                    <div className="flex items-center gap-1">
                       <button
-                        onClick={() => onEditStart(item)}
-                        disabled={!isAdmin || item.id.startsWith('default-')}
-                        className="px-2 py-1 rounded-md text-xs disabled:opacity-50"
-                        style={{ background: '#F4F7F4', color: '#4A6B4A', border: '1px solid #C8DCC8' }}
+                        onClick={() => { onUseCommand?.(item.text); onClose?.() }}
+                        className="px-3 py-1 rounded-md text-xs font-semibold hover:opacity-80 transition-opacity"
+                        style={{ background: '#E8F5E9', color: '#2E7D32', border: '1px solid #C8DCC8' }}
                       >
-                        Editar
+                        Usar
                       </button>
-                    )}
-                    <button
-                      onClick={() => onDelete(item.id)}
-                      disabled={!isAdmin || item.id.startsWith('default-')}
-                      className="px-2 py-1 rounded-md text-xs disabled:opacity-50"
-                      style={{ background: '#FFF3F3', color: '#B91C1C', border: '1px solid #FFCDD2' }}
-                    >
-                      Eliminar
-                    </button>
+                      {editingId === item.id ? (
+                        <>
+                          <button
+                            onClick={() => onEditSave(item)}
+                            disabled={!editingText.trim() || savingEditId === item.id}
+                            className="px-2 py-1 rounded-md text-xs font-semibold disabled:opacity-50"
+                            style={{ background: '#E8F5E9', color: '#2E7D32', border: '1px solid #C8DCC8' }}
+                          >
+                            Guardar
+                          </button>
+                          <button
+                            onClick={onEditCancel}
+                            className="px-2 py-1 rounded-md text-xs"
+                            style={{ background: '#F3F4F6', color: '#4B5563', border: '1px solid #D1D5DB' }}
+                          >
+                            Cancelar
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          {!item.id.startsWith('default-') && isAdmin && (
+                            <>
+                              <button
+                                onClick={() => onEditStart(item)}
+                                className="px-2 py-1 rounded-md text-xs disabled:opacity-50"
+                                style={{ background: '#F4F7F4', color: '#4A6B4A', border: '1px solid #C8DCC8' }}
+                              >
+                                ✏️
+                              </button>
+                              <button
+                                onClick={() => onDelete(item.id)}
+                                className="px-2 py-1 rounded-md text-xs"
+                                style={{ background: '#FFF3F3', color: '#B91C1C', border: '1px solid #FFCDD2' }}
+                              >
+                                🗑️
+                              </button>
+                            </>
+                          )}
+                        </>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </motion.div>
-            ))}
+                </motion.div>
+              ))
+            )}
           </AnimatePresence>
         </div>
       </motion.div>

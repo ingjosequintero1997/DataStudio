@@ -15,7 +15,7 @@ const PLACEHOLDER_CYCLE = [
 
 const spring = { type: 'spring', stiffness: 380, damping: 28 }
 
-export default function CommandBar({ onExecute, isExecuting, injectedValue, onClear }) {
+export default function CommandBar({ onExecute, isExecuting, injectedValue, onClear, onShowKnowledgeBase, tables = [] }) {
   const [value, setValue] = useState('')
   const [phIdx, setPhIdx] = useState(0)
   const [showSuggestions, setShowSuggestions] = useState(false)
@@ -55,13 +55,21 @@ export default function CommandBar({ onExecute, isExecuting, injectedValue, onCl
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
             </svg>
           </div>
-          <span className="text-xs font-semibold tracking-wide" style={{ color: '#93c5fd', fontFamily: 'Inter, sans-serif', letterSpacing: '0.03em' }}>
+          <span className="text-xs font-semibold tracking-wide" style={{ color: '#2E7D32', fontFamily: 'Inter, sans-serif', letterSpacing: '0.03em' }}>
             Consulta en Lenguaje Natural
           </span>
         </div>
         <div className="flex-1" />
-        <span className="text-[10px] tracking-wide" style={{ color: '#334155', fontFamily: 'Inter, sans-serif' }}>
-          Enter para ejecutar · Shift+Enter = nueva línea
+        <button
+          onClick={onShowKnowledgeBase}
+          className="px-3 py-1.5 rounded-lg text-xs font-semibold hover:opacity-80 transition-opacity"
+          style={{ background: '#2E7D32', color: '#fff', border: 'none' }}
+          title="Abrir Base de Conocimiento"
+        >
+          📚 Instrucciones
+        </button>
+        <span className="text-[10px] tracking-wide ml-3" style={{ color: '#334155', fontFamily: 'Inter, sans-serif' }}>
+          Enter para ejecutar
         </span>
       </div>
 
