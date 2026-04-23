@@ -18,7 +18,7 @@ function detectPlaceholders(text) {
   return { hasTable: tableMatches.length > 0, hasColumn: columnMatches.length > 0, tableMatches, columnMatches }
 }
 
-export default function KnowledgeBaseModal({ open, onClose, userEmail, onUseCommand, addToast, tables = [] }) {
+export default function KnowledgeBaseModal({ open, onClose, userEmail, onUseCommand, onRunCommand, addToast, tables = [] }) {
   const [items, setItems] = useState([])
   const [search, setSearch] = useState('')
   const [newText, setNewText] = useState('')
@@ -349,7 +349,7 @@ export default function KnowledgeBaseModal({ open, onClose, userEmail, onUseComm
                     </span>
                     <div className="flex items-center gap-1">
                       <button
-                        onClick={() => { onUseCommand?.(item.text); onClose?.() }}
+                        onClick={() => { onUseCommand?.(item.text); onRunCommand?.(item.text); onClose?.() }}
                         className="px-3 py-1 rounded-md text-xs font-semibold hover:opacity-80 transition-opacity"
                         style={{ background: '#E8F5E9', color: '#2E7D32', border: '1px solid #C8DCC8' }}
                       >

@@ -67,6 +67,8 @@ export default function Layout({ user }) {
   const [showCrossWizard, setShowCrossWizard] = useState(false)
   const [showKnowledgeBase, setShowKnowledgeBase] = useState(false)
   const [newQuerySignal, setNewQuerySignal] = useState(0)
+  const [activeQueryTabId, setActiveQueryTabId] = useState(1)
+  const [querySessions, setQuerySessions] = useState({})
   const containerRef = useRef(null)
 
   const addToast = useCallback((message, type = 'info', title) => {
@@ -76,6 +78,28 @@ export default function Layout({ user }) {
 
   const removeToast = useCallback((id) => {
     setToasts(prev => prev.filter(t => t.id !== id))
+  }, [])
+
+  useEffect(() => {
+    const current = querySessions[activeQueryTabId] || {}
+    setQueryResult(current.result || null)
+    setQueryError(current.error || null)
+    if (!isExecuting) {
+      setStatusMessage(current.statusMessage || 'Listo')
+    }
+  }, [activeQueryTabId, querySessions])
+
+  const setSessionState = useCallback((tabId, patch) => {
+    setQuerySessions(prev => {
+      const base = prev[tabId] || {}
+      return {
+        ...prev,
+        [tabId]: {
+          ...base,
+          ...patch,
+        },
+      }
+    })
   }, [])
 
   useEffect(() => {
@@ -134,8 +158,13 @@ export default function Layout({ user }) {
   const handleClearResults = useCallback(() => {
     setQueryResult(null)
     setQueryError(null)
+    setSessionState(activeQueryTabId, {
+      result: null,
+      error: null,
+      statusMessage: 'Resultados limpiados. Listo para una nueva consulta.',
+    })
     setStatusMessage('Resultados limpiados. Listo para una nueva consulta.')
-  }, [])
+  }, [activeQueryTabId, setSessionState])
 
   const handleApplyCrossPostAction = useCallback(async (res) => {
     const ctx = res?.crossContext
@@ -207,14 +236,16 @@ export default function Layout({ user }) {
     })
   }, [queryResult, lastResult])
 
-  const handleExecuteCommand = useCallback(async (input) => {
+  const handleExecuteCommand = useCallback(async (input, tabId = activeQueryTabId) => {
     setIsExecuting(true)
     setQueryError(null)
     setQueryResult(null)
+    setSessionState(tabId, { result: null, error: null })
     setStatusMessage('Interpretando comando...')
     const parsed = parseCommand(input, tables)
     if (parsed.error) {
       setQueryError(parsed.error)
+      setSessionState(tabId, { error: parsed.error, result: null, statusMessage: 'No se pudo interpretar el comando.' })
       setIsExecuting(false)
       setStatusMessage('No se pudo interpretar el comando.')
       addToast(parsed.error, 'error', 'Comando no reconocido')
@@ -223,6 +254,7 @@ export default function Layout({ user }) {
     if (parsed.action === 'export') { handleExportCSV(); setIsExecuting(false); return }
     if (parsed.action === 'help') {
       setQueryError('Comandos disponibles: cruzar, consolidar, filtrar, actualizar, reemplazar, vaciar columna, reordenar columnas, contar, mostrar, exportar.')
+      setSessionState(tabId, { error: 'Comandos disponibles: cruzar, consolidar, filtrar, actualizar, reemplazar, vaciar columna, reordenar columnas, contar, mostrar, exportar.', result: null })
       setIsExecuting(false)
       return
     }
@@ -252,6 +284,7 @@ export default function Layout({ user }) {
       const duration = ((performance.now() - start) / 1000).toFixed(3)
       const final = { ...result, duration }
       setQueryResult(final)
+      setSessionState(tabId, { result: final, error: null, statusMessage: parsed.description + ' — ' + result.rowCount.toLocaleString() + ' fila(s) en ' + duration + 's' })
       setLastResult(final)
       setStatusMessage(parsed.description + ' — ' + result.rowCount.toLocaleString() + ' fila(s) en ' + duration + 's')
       addToast(result.rowCount.toLocaleString() + ' filas · ' + duration + 's', 'success', parsed.description)
@@ -277,12 +310,13 @@ export default function Layout({ user }) {
         ? `Los archivos son demasiado grandes para procesarlos directamente. Usa el Asistente de Cruce (botón ⋈ en la barra) o limita la consulta con LIMIT.\n\nDetalle: ${msg}`
         : msg
       setQueryError('Error de motor: ' + friendly)
+      setSessionState(tabId, { error: 'Error de motor: ' + friendly, result: null, statusMessage: 'Error al procesar.' })
       setStatusMessage('Error al procesar.')
       addToast(msg.slice(0,80), 'error', 'Error de procesamiento')
     } finally {
       setIsExecuting(false)
     }
-  }, [tables, handleExportCSV, addToast])
+  }, [tables, handleExportCSV, addToast, activeQueryTabId, setSessionState])
 
   const handleCrossViaToolbar = () => {
     if (tables.length < 2) { addToast('Carga al menos 2 archivos para cruzar.', 'info'); return }
@@ -414,10 +448,11 @@ export default function Layout({ user }) {
 
         {/* ── CENTER ── */}
         <div ref={containerRef} className="flex flex-col flex-1 overflow-hidden min-w-0">
-          <div style={{ height: editorHeight + '%' }} className="flex flex-col overflow-hidden">
+          <div style={{ height: editorHeight + '%' }} className="flex flex-col overflow-visible">
             <CommandBar onExecute={handleExecuteCommand} isExecuting={isExecuting}
               injectedValue={injectedCommand} onClear={() => setInjectedCommand(null)}
-              tables={tables} newTabSignal={newQuerySignal} />
+              tables={tables} newTabSignal={newQuerySignal}
+              onTabChange={setActiveQueryTabId} />
           </div>
           <div className="resize-handle-y shrink-0" onMouseDown={onMouseDownY} />
           <div className="flex flex-col flex-1 overflow-hidden">
@@ -472,6 +507,7 @@ export default function Layout({ user }) {
             onClose={() => setShowCrossWizard(false)}
             onResult={async (res) => {
               setQueryResult(res)
+              setSessionState(activeQueryTabId, { result: res, error: null, statusMessage: 'Cruce ejecutado — ' + res.rowCount.toLocaleString() + ' fila(s)' })
               setLastResult(res)
               setStatusMessage('Cruce ejecutado — ' + res.rowCount.toLocaleString() + ' fila(s)')
               addToast(res.rowCount.toLocaleString() + ' filas', 'success', 'Cruce completado')
@@ -489,6 +525,7 @@ export default function Layout({ user }) {
             onClose={() => setShowKnowledgeBase(false)}
             addToast={addToast}
             onUseCommand={(cmd) => setInjectedCommand(cmd)}
+            onRunCommand={(cmd) => handleExecuteCommand(cmd, activeQueryTabId)}
             tables={tables}
           />
         )}

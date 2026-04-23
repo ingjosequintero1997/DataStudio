@@ -77,7 +77,8 @@ function buildJoinProjection(leftTable, rightTable, leftCols, rightCols, leftJoi
 export function parseCommand(input, tables) {
   if (!input?.trim()) return { error: "Escribe una consulta para comenzar." }
   if (!tables?.length) return { error: "No hay tablas cargadas. Primero carga un archivo." }
-  const raw = input.trim()
+  const rawInput = input.trim()
+  const raw = rawInput.replace(/\[([^\]]+)\]/g, '$1').trim()
   const norm = normalize(raw)
 
   // ── SQL directo ──────────────────────────────────────────────────────────
@@ -104,7 +105,7 @@ export function parseCommand(input, tables) {
     else if (/(full|completo|outer|todos.*ambos)/.test(norm)) joinType="FULL OUTER JOIN"
     else if (/(right|derecha)/.test(norm)) joinType="RIGHT JOIN"
     const projection = buildJoinProjection(t1, t2, cols1, cols2, joinCol, rightJoinCol)
-    const sql = `SELECT ${projection}\nFROM "${t1}" a\n${joinType} "${t2}" b\n  ON a."${joinCol}" = b."${rightJoinCol}"\nLIMIT ${MAX_JOIN_ROWS};`
+    const sql = `SELECT ${projection}\nFROM "${t1}" a\n${joinType} "${t2}" b\n  ON TRIM(CAST(a."${joinCol}" AS VARCHAR)) = TRIM(CAST(b."${rightJoinCol}" AS VARCHAR))\nLIMIT ${MAX_JOIN_ROWS};`
     return { sql, action:"query", description:`${joinType} de "${t1}" y "${t2}" por "${joinCol}"` }
   }
 

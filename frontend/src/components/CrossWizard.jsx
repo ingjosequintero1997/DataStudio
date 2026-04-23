@@ -51,7 +51,7 @@ function buildSQL({ leftTable, rightTable, leftCols, rightCols, joinCol, rightJo
       `SELECT ${buildJoinProjection(leftTable, rightTable, leftCols, rightCols, joinCol, rightJoinCol)}\n` +
       `FROM "${leftTable}" ${al}\n` +
       `${joinType} "${rightTable}" ${ar}\n` +
-      `  ON ${al}."${joinCol}" = ${ar}."${rightJoinCol}"\n` +
+      `  ON TRIM(CAST(${al}."${joinCol}" AS VARCHAR)) = TRIM(CAST(${ar}."${rightJoinCol}" AS VARCHAR))\n` +
       `LIMIT ${MAX_JOIN_ROWS};`
     )
   }
@@ -68,7 +68,7 @@ function buildSQL({ leftTable, rightTable, leftCols, rightCols, joinCol, rightJo
     `SELECT ${sel}\n` +
     `FROM "${leftTable}" ${al}\n` +
     `${joinType} "${rightTable}" ${ar}\n` +
-    `  ON ${al}."${joinCol}" = ${ar}."${rightJoinCol}"\n` +
+    `  ON TRIM(CAST(${al}."${joinCol}" AS VARCHAR)) = TRIM(CAST(${ar}."${rightJoinCol}" AS VARCHAR))\n` +
     `GROUP BY ${groupCol}\n` +
     `ORDER BY 2 DESC\n` +
     `LIMIT ${MAX_JOIN_ROWS};`
@@ -145,6 +145,11 @@ export default function CrossWizard({ tables, onClose, onResult }) {
     setError(null)
     try {
       const res = await executeQuery(sqlPreview)
+      const stats = (res.rows || []).reduce((acc, row) => {
+        if (row.estado_cruce === 'coincide') acc.matched += 1
+        else if (row.estado_cruce === 'sin_coincidencia') acc.unmatched += 1
+        return acc
+      }, { matched: 0, unmatched: 0 })
       const joinLabel = JOIN_TYPES.find(j => j.value === joinType)?.label || joinType
       const aggLabel  = AGG_OPS.find(a  => a.value === aggOp)?.label  || aggOp
       const crossContext = {
@@ -153,6 +158,8 @@ export default function CrossWizard({ tables, onClose, onResult }) {
         aggCol: needsAggCol ? aggCol : null,
         sql: sqlPreview,
         rowCount: res.rowCount,
+        matchedRows: stats.matched,
+        unmatchedRows: stats.unmatched,
         limited: res.rowCount >= MAX_JOIN_ROWS,
         postAction,
         targetTable,

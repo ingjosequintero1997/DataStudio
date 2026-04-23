@@ -70,6 +70,8 @@ function CrossBanner({ ctx, onExport, onExportExcel }) {
           { label: 'Cálculo', value: AGG_LABELS[ctx.aggOp] || ctx.aggLabel },
           ...(ctx.aggCol ? [{ label: 'Columna calculada', value: ctx.aggCol }] : []),
           { label: 'Filas obtenidas', value: ctx.rowCount?.toLocaleString() },
+          ...(typeof ctx.matchedRows === 'number' ? [{ label: 'Coincidencias', value: ctx.matchedRows.toLocaleString() }] : []),
+          ...(typeof ctx.unmatchedRows === 'number' ? [{ label: 'Sin coincidencia', value: ctx.unmatchedRows.toLocaleString() }] : []),
         ].map(({ label, value }) => (
           <div key={label} style={{ display: 'flex', flexDirection: 'column' }}>
             <span style={{ fontSize: '0.62rem', fontWeight: 700, color: G.dim, textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: 'Inter,sans-serif' }}>{label}</span>

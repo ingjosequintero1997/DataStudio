@@ -129,7 +129,23 @@ function buildBracketContext(text, cursorPosition, tables) {
     })
   }
 
-  if (!items.length) return null
+  if (!items.length) {
+    if (!tables.length) {
+      return {
+        start,
+        end: safeCursor,
+        items: [{
+          key: 'empty:no_tables',
+          label: 'No hay archivos cargados',
+          caption: 'Carga archivos para usar autocompletado',
+          insertText: '',
+          section: 'Archivos cargados',
+          type: 'hint',
+        }],
+      }
+    }
+    return null
+  }
 
   return {
     start,
@@ -138,7 +154,7 @@ function buildBracketContext(text, cursorPosition, tables) {
   }
 }
 
-export default function CommandBar({ onExecute, isExecuting, injectedValue, onClear, tables = [], newTabSignal = 0 }) {
+export default function CommandBar({ onExecute, isExecuting, injectedValue, onClear, tables = [], newTabSignal = 0, onTabChange }) {
   const [tabs, setTabs] = useState([{ id: 1, draft: '' }])
   const [activeTabId, setActiveTabId] = useState(1)
   const [phIdx, setPhIdx] = useState(0)
@@ -179,6 +195,10 @@ export default function CommandBar({ onExecute, isExecuting, injectedValue, onCl
     setCursorPosition(0)
     requestAnimationFrame(() => textareaRef.current?.focus())
   }, [newTabSignal])
+
+  useEffect(() => {
+    onTabChange?.(activeTabId)
+  }, [activeTabId, onTabChange])
 
   const filteredExamples = useMemo(() => (
     value.length > 1
@@ -236,11 +256,12 @@ export default function CommandBar({ onExecute, isExecuting, injectedValue, onCl
 
   const submit = () => {
     if (!value.trim() || isExecuting) return
-    onExecute(value.trim())
+    onExecute(value.trim(), activeTabId)
   }
 
   const applySuggestion = (suggestion) => {
     if (!suggestion) return
+    if (suggestion.type === 'hint') return
 
     if (bracketContext) {
       const suffixOffset = value[bracketContext.end] === ']' ? 1 : 0
@@ -434,7 +455,12 @@ export default function CommandBar({ onExecute, isExecuting, injectedValue, onCl
           )}
 
           {showSuggestions && visibleSuggestions.length > 0 && (
-            <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} className="absolute left-0 right-0 top-full mt-1 rounded-xl z-20 overflow-hidden" style={{ background: '#fff', backdropFilter: 'blur(10px)', border: '1px solid #C8DCC8', boxShadow: '0 8px 24px rgba(0,0,0,0.1)' }}>
+            <motion.div
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              className={bracketContext ? 'absolute left-0 top-0 bottom-0 w-[44%] rounded-xl z-20 overflow-auto' : 'absolute left-0 right-0 top-full mt-1 rounded-xl z-20 overflow-hidden'}
+              style={{ background: '#fff', backdropFilter: 'blur(10px)', border: '1px solid #C8DCC8', boxShadow: '0 8px 24px rgba(0,0,0,0.16)' }}
+            >
               {visibleSuggestions.map((item, index) => {
                 const section = bracketContext ? item.section : ''
                 const showSection = bracketContext && section !== currentSection
@@ -449,7 +475,9 @@ export default function CommandBar({ onExecute, isExecuting, injectedValue, onCl
                     )}
                     <motion.button whileHover={{ backgroundColor: '#E8F5E9' }} onMouseDown={() => applySuggestion(item)} className="w-full text-left px-4 py-2.5 flex items-center gap-3 transition-colors" style={{ borderBottom: index < visibleSuggestions.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none', background: index === selectedSuggestionIndex ? '#E8F5E9' : '#fff' }}>
                       <span style={{ color: '#43A047', fontSize: '0.72rem', fontFamily: 'JetBrains Mono, monospace' }}>
-                        {bracketContext ? (item.type === 'column' ? '# ' : 'tbl') : '▸'}
+                        {bracketContext
+                          ? (item.type === 'column' ? '# ' : item.type === 'hint' ? 'i' : 'tbl')
+                          : '▸'}
                       </span>
                       <div className="flex-1 min-w-0">
                         <div className="truncate" style={{ color: '#1B3318', fontSize: '0.8rem', fontFamily: 'Inter, sans-serif', fontWeight: 600 }}>
