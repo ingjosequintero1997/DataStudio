@@ -66,6 +66,7 @@ export default function Layout({ user }) {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [showCrossWizard, setShowCrossWizard] = useState(false)
   const [showKnowledgeBase, setShowKnowledgeBase] = useState(false)
+  const [newQuerySignal, setNewQuerySignal] = useState(0)
   const containerRef = useRef(null)
 
   const addToast = useCallback((message, type = 'info', title) => {
@@ -416,7 +417,7 @@ export default function Layout({ user }) {
           <div style={{ height: editorHeight + '%' }} className="flex flex-col overflow-hidden">
             <CommandBar onExecute={handleExecuteCommand} isExecuting={isExecuting}
               injectedValue={injectedCommand} onClear={() => setInjectedCommand(null)}
-              tables={tables} />
+              tables={tables} newTabSignal={newQuerySignal} />
           </div>
           <div className="resize-handle-y shrink-0" onMouseDown={onMouseDownY} />
           <div className="flex flex-col flex-1 overflow-hidden">
@@ -461,7 +462,7 @@ export default function Layout({ user }) {
       {showUploader && (
         <FileUploader onClose={() => setShowUploader(false)}
           onTableLoaded={handleTableLoaded} setStatusMessage={setStatusMessage}
-          onNewQuery={() => setShowUploader(false)} />
+          onNewQuery={() => { setShowUploader(false); setNewQuerySignal(signal => signal + 1) }} />
       )}
 
       <AnimatePresence>

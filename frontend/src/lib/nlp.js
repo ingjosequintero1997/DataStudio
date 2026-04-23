@@ -67,6 +67,13 @@ function isNumericType(type) {
   return ["INTEGER","BIGINT","DOUBLE","FLOAT","DECIMAL","NUMERIC","HUGEINT","UBIGINT","SMALLINT","TINYINT"].includes((type||"").toUpperCase())
 }
 
+function buildJoinProjection(leftTable, rightTable, leftCols, rightCols, leftJoinCol, rightJoinCol) {
+  const leftProjection = (leftCols || []).map(col => `a."${col.name}" AS "${leftTable}.${col.name}"`)
+  const rightProjection = (rightCols || []).map(col => `b."${col.name}" AS "${rightTable}.${col.name}"`)
+  const statusProjection = `CASE WHEN a."${leftJoinCol}" IS NOT NULL AND b."${rightJoinCol}" IS NOT NULL THEN 'coincide' ELSE 'sin_coincidencia' END AS "estado_cruce"`
+  return [statusProjection, ...leftProjection, ...rightProjection].join(',\n       ')
+}
+
 export function parseCommand(input, tables) {
   if (!input?.trim()) return { error: "Escribe una consulta para comenzar." }
   if (!tables?.length) return { error: "No hay tablas cargadas. Primero carga un archivo." }
@@ -91,11 +98,13 @@ export function parseCommand(input, tables) {
     if (byM) { const c = findColumn(byM[1],cols1)||findColumn(byM[1],cols2); if(c) joinCol=c.name }
     if (!joinCol && common) joinCol = common.name
     if (!joinCol) return { error: `No hay columna común entre "${t1}" y "${t2}". Escribe: "Cruza ${t1} con ${t2} por [columna]"` }
+    const rightJoinCol = (findColumn(byM?.[1] || joinCol, cols2)?.name) || joinCol
     let joinType = "LEFT JOIN"
     if (/(inner|solo.*coincide|solo.*comun)/.test(norm)) joinType="INNER JOIN"
     else if (/(full|completo|outer|todos.*ambos)/.test(norm)) joinType="FULL OUTER JOIN"
     else if (/(right|derecha)/.test(norm)) joinType="RIGHT JOIN"
-    const sql = `SELECT *\nFROM "${t1}" a\n${joinType} "${t2}" b\n  ON a."${joinCol}" = b."${joinCol}"\nLIMIT ${MAX_JOIN_ROWS};`
+    const projection = buildJoinProjection(t1, t2, cols1, cols2, joinCol, rightJoinCol)
+    const sql = `SELECT ${projection}\nFROM "${t1}" a\n${joinType} "${t2}" b\n  ON a."${joinCol}" = b."${rightJoinCol}"\nLIMIT ${MAX_JOIN_ROWS};`
     return { sql, action:"query", description:`${joinType} de "${t1}" y "${t2}" por "${joinCol}"` }
   }
 

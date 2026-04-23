@@ -35,13 +35,20 @@ const AGG_OPS = [
 
 const MAX_JOIN_ROWS = 50000
 
-function buildSQL({ leftTable, rightTable, joinCol, rightJoinCol, joinType, aggOp, aggCol, groupBy }) {
+function buildJoinProjection(leftTable, rightTable, leftCols, rightCols, joinCol, rightJoinCol) {
+  const leftProjection = (leftCols || []).map((column) => `a."${column.name}" AS "${leftTable}.${column.name}"`)
+  const rightProjection = (rightCols || []).map((column) => `b."${column.name}" AS "${rightTable}.${column.name}"`)
+  const matchFlag = `CASE WHEN a."${joinCol}" IS NOT NULL AND b."${rightJoinCol}" IS NOT NULL THEN 'coincide' ELSE 'sin_coincidencia' END AS "estado_cruce"`
+  return [matchFlag, ...leftProjection, ...rightProjection].join(',\n       ')
+}
+
+function buildSQL({ leftTable, rightTable, leftCols, rightCols, joinCol, rightJoinCol, joinType, aggOp, aggCol, groupBy }) {
   if (!leftTable || !rightTable || !joinCol || !rightJoinCol) return null
   const al = 'a', ar = 'b'
 
   if (aggOp === 'none') {
     return (
-      `SELECT ${al}.*, ${ar}.*\n` +
+      `SELECT ${buildJoinProjection(leftTable, rightTable, leftCols, rightCols, joinCol, rightJoinCol)}\n` +
       `FROM "${leftTable}" ${al}\n` +
       `${joinType} "${rightTable}" ${ar}\n` +
       `  ON ${al}."${joinCol}" = ${ar}."${rightJoinCol}"\n` +
@@ -119,12 +126,12 @@ export default function CrossWizard({ tables, onClose, onResult }) {
   }, [leftTable, rightTable])
 
   useEffect(() => {
-    if (!targetTable && leftTable) setTargetTable(leftTable)
-  }, [leftTable, targetTable])
+    setTargetTable(leftTable || '')
+  }, [leftTable])
 
   const sqlPreview = useMemo(
-    () => buildSQL({ leftTable, rightTable, joinCol, rightJoinCol, joinType, aggOp, aggCol, groupBy }),
-    [leftTable, rightTable, joinCol, rightJoinCol, joinType, aggOp, aggCol, groupBy]
+    () => buildSQL({ leftTable, rightTable, leftCols, rightCols, joinCol, rightJoinCol, joinType, aggOp, aggCol, groupBy }),
+    [leftTable, rightTable, leftCols, rightCols, joinCol, rightJoinCol, joinType, aggOp, aggCol, groupBy]
   )
 
   const needsAggCol = ['sum','avg','both'].includes(aggOp)
