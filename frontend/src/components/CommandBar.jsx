@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { EXAMPLE_COMMANDS } from '../lib/nlp'
 
@@ -15,11 +15,85 @@ const PLACEHOLDER_CYCLE = [
 
 const spring = { type: 'spring', stiffness: 380, damping: 28 }
 
-export default function CommandBar({ onExecute, isExecuting, injectedValue, onClear, onShowKnowledgeBase, tables = [] }) {
+function normalizeText(text) {
+  return (text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+}
+
+function findLastMentionedTable(text, tables) {
+  const source = normalizeText(text)
+  let bestMatch = null
+
+  tables.forEach((table) => {
+    const tableName = normalizeText(table.name)
+    const idx = source.lastIndexOf(tableName)
+    if (idx !== -1 && (!bestMatch || idx > bestMatch.idx)) {
+      bestMatch = { idx, table }
+    }
+  })
+
+  return bestMatch?.table || null
+}
+
+function buildBracketContext(text, cursorPosition, tables) {
+  const safeCursor = typeof cursorPosition === 'number' ? cursorPosition : text.length
+  const start = text.lastIndexOf('[', safeCursor - 1)
+  if (start === -1) return null
+
+  const closing = text.indexOf(']', start)
+  if (closing !== -1 && closing < safeCursor) return null
+
+  const beforeBracket = text.slice(0, start)
+  const rawQuery = text.slice(start + 1, safeCursor)
+  const query = normalizeText(rawQuery)
+  const nearbyText = normalizeText(beforeBracket.slice(Math.max(0, beforeBracket.length - 120)))
+  const activeTable = findLastMentionedTable(beforeBracket, tables)
+  const wantsColumns = /(columna|columnas|campo|campos|atributo|atributos)/.test(nearbyText) && activeTable
+
+  const sourceItems = wantsColumns
+    ? (activeTable?.columns || []).map((column) => ({
+        key: `${activeTable.name}:${column.name}`,
+        label: column.name,
+        insertValue: column.name,
+        caption: activeTable.name,
+        type: 'column',
+      }))
+    : tables.map((table) => ({
+        key: table.name,
+        label: table.name,
+        insertValue: table.name,
+        caption: `${table.columns?.length || 0} columna(s)`,
+        type: 'table',
+      }))
+
+  const items = sourceItems.filter((item) => {
+    if (!query) return true
+    const label = normalizeText(item.label)
+    return label.includes(query)
+  })
+
+  if (!items.length) return null
+
+  return {
+    start,
+    end: safeCursor,
+    mode: wantsColumns ? 'columns' : 'tables',
+    activeTable,
+    query: rawQuery,
+    items: items.slice(0, 8),
+  }
+}
+
+export default function CommandBar({ onExecute, isExecuting, injectedValue, onClear, tables = [] }) {
   const [value, setValue] = useState('')
   const [phIdx, setPhIdx] = useState(0)
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [focused, setFocused] = useState(false)
+  const [cursorPosition, setCursorPosition] = useState(0)
+  const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(0)
   const textareaRef = useRef(null)
 
   useEffect(() => {
@@ -31,6 +105,7 @@ export default function CommandBar({ onExecute, isExecuting, injectedValue, onCl
   useEffect(() => {
     if (injectedValue) {
       setValue(injectedValue)
+      setCursorPosition(injectedValue.length)
       textareaRef.current?.focus()
       onClear?.()
     }
@@ -40,9 +115,100 @@ export default function CommandBar({ onExecute, isExecuting, injectedValue, onCl
     ? EXAMPLE_COMMANDS.filter(c => c.toLowerCase().includes(value.toLowerCase())).slice(0, 5)
     : []
 
+  const bracketContext = useMemo(
+    () => buildBracketContext(value, cursorPosition, tables),
+    [cursorPosition, tables, value]
+  )
+
+  const visibleSuggestions = bracketContext?.items || filtered
+
+  useEffect(() => {
+    setSelectedSuggestionIndex(0)
+  }, [value, cursorPosition])
+
   const submit = () => {
     if (!value.trim() || isExecuting) return
     onExecute(value.trim())
+  }
+
+  const applySuggestion = (suggestion) => {
+    if (!suggestion) return
+
+    if (bracketContext) {
+      const suffixOffset = value[bracketContext.end] === ']' ? 1 : 0
+      const nextValue =
+        value.slice(0, bracketContext.start) +
+        suggestion.insertValue +
+        value.slice(bracketContext.end + suffixOffset)
+
+      setValue(nextValue)
+      setShowSuggestions(false)
+
+      requestAnimationFrame(() => {
+        const nextCaret = bracketContext.start + suggestion.insertValue.length
+        textareaRef.current?.focus()
+        textareaRef.current?.setSelectionRange(nextCaret, nextCaret)
+        setCursorPosition(nextCaret)
+      })
+      return
+    }
+
+    setValue(suggestion)
+    setShowSuggestions(false)
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+      const nextCaret = suggestion.length
+      textareaRef.current?.setSelectionRange(nextCaret, nextCaret)
+      setCursorPosition(nextCaret)
+    })
+  }
+
+  const handleChange = (event) => {
+    const nextValue = event.target.value
+    const nextCursor = event.target.selectionStart ?? nextValue.length
+    setValue(nextValue)
+    setCursorPosition(nextCursor)
+    setShowSuggestions(Boolean(buildBracketContext(nextValue, nextCursor, tables)) || nextValue.length > 1)
+  }
+
+  const handleKeyDown = (event) => {
+    if (showSuggestions && visibleSuggestions.length > 0) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        setSelectedSuggestionIndex((current) => (current + 1) % visibleSuggestions.length)
+        return
+      }
+
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        setSelectedSuggestionIndex((current) => (current - 1 + visibleSuggestions.length) % visibleSuggestions.length)
+        return
+      }
+
+      if (event.key === 'Enter' && !event.shiftKey) {
+        if (bracketContext) {
+          event.preventDefault()
+          applySuggestion(visibleSuggestions[selectedSuggestionIndex])
+          return
+        }
+
+        if (filtered.length > 0 && selectedSuggestionIndex >= 0 && value.trim() !== visibleSuggestions[selectedSuggestionIndex]) {
+          event.preventDefault()
+          applySuggestion(visibleSuggestions[selectedSuggestionIndex])
+          return
+        }
+      }
+
+      if (event.key === 'Escape') {
+        setShowSuggestions(false)
+        return
+      }
+    }
+
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      submit()
+    }
   }
 
   return (
@@ -60,14 +226,6 @@ export default function CommandBar({ onExecute, isExecuting, injectedValue, onCl
           </span>
         </div>
         <div className="flex-1" />
-        <button
-          onClick={onShowKnowledgeBase}
-          className="px-3 py-1.5 rounded-lg text-xs font-semibold hover:opacity-80 transition-opacity"
-          style={{ background: '#2E7D32', color: '#fff', border: 'none' }}
-          title="Abrir Base de Conocimiento"
-        >
-          📚 Instrucciones
-        </button>
         <span className="text-[10px] tracking-wide ml-3" style={{ color: '#334155', fontFamily: 'Inter, sans-serif' }}>
           Enter para ejecutar
         </span>
@@ -96,8 +254,11 @@ export default function CommandBar({ onExecute, isExecuting, injectedValue, onCl
             <textarea
               ref={textareaRef}
               value={value}
-              onChange={e => { setValue(e.target.value); setShowSuggestions(e.target.value.length > 1) }}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }}
+              onChange={handleChange}
+              onClick={(event) => setCursorPosition(event.currentTarget.selectionStart ?? value.length)}
+              onKeyUp={(event) => setCursorPosition(event.currentTarget.selectionStart ?? value.length)}
+              onSelect={(event) => setCursorPosition(event.currentTarget.selectionStart ?? value.length)}
+              onKeyDown={handleKeyDown}
               onFocus={() => setFocused(true)}
               onBlur={() => { setFocused(false); setTimeout(() => setShowSuggestions(false), 150) }}
               disabled={isExecuting}
@@ -132,17 +293,38 @@ export default function CommandBar({ onExecute, isExecuting, injectedValue, onCl
           )}
 
           {/* Autocomplete */}
-          {showSuggestions && filtered.length > 0 && (
+          {showSuggestions && visibleSuggestions.length > 0 && (
             <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}
               className="absolute left-0 right-0 top-full mt-1 rounded-xl z-20 overflow-hidden"
               style={{ background: '#fff', backdropFilter: 'blur(10px)', border: '1px solid #C8DCC8', boxShadow: '0 8px 24px rgba(0,0,0,0.1)' }}>
-              {filtered.map((cmd, i) => (
-                <motion.button key={i} whileHover={{ backgroundColor: '#E8F5E9' }}
-                  onMouseDown={() => { setValue(cmd); setShowSuggestions(false); textareaRef.current?.focus() }}
+              {bracketContext && (
+                <div className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ background: '#F4FBF4', color: '#2E7D32', borderBottom: '1px solid #E0EDE0' }}>
+                  {bracketContext.mode === 'columns'
+                    ? `Columnas de ${bracketContext.activeTable?.name || ''}`
+                    : 'Archivos cargados'}
+                </div>
+              )}
+              {visibleSuggestions.map((cmd, i) => (
+                <motion.button key={bracketContext ? cmd.key : `${cmd}-${i}`} whileHover={{ backgroundColor: '#E8F5E9' }}
+                  onMouseDown={() => applySuggestion(cmd)}
                   className="w-full text-left px-4 py-2.5 flex items-center gap-3 transition-colors"
-                  style={{ borderBottom: i < filtered.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
-                  <span style={{ color: '#43A047', fontSize: '0.7rem', fontFamily: 'JetBrains Mono, monospace' }}>▸</span>
-                  <span style={{ color: '#1B3318', fontSize: '0.78rem', fontFamily: 'Inter, sans-serif' }}>{cmd}</span>
+                  style={{
+                    borderBottom: i < visibleSuggestions.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none',
+                    background: i === selectedSuggestionIndex ? '#E8F5E9' : '#fff',
+                  }}>
+                  <span style={{ color: '#43A047', fontSize: '0.7rem', fontFamily: 'JetBrains Mono, monospace' }}>
+                    {bracketContext ? (cmd.type === 'column' ? '# ' : 'tbl') : '▸'}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="truncate" style={{ color: '#1B3318', fontSize: '0.78rem', fontFamily: 'Inter, sans-serif' }}>
+                      {bracketContext ? cmd.label : cmd}
+                    </div>
+                    {bracketContext && cmd.caption && (
+                      <div className="truncate" style={{ color: '#6B8B6B', fontSize: '0.68rem', fontFamily: 'Inter, sans-serif' }}>
+                        {cmd.caption}
+                      </div>
+                    )}
+                  </div>
                 </motion.button>
               ))}
             </motion.div>
