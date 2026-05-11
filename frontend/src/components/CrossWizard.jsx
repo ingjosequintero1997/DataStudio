@@ -1,108 +1,188 @@
-/**
- * CrossWizard — Asistente visual de cruce de archivos
- * Configura el cruce → ejecuta → resultados van al área principal.
- */
-import { useState, useMemo, useEffect } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { executeQuery } from '../lib/duckdb'
 
 const spring = { type: 'spring', stiffness: 380, damping: 32 }
+const MAX_JOIN_ROWS = 50000
+const MATCH_ALL = '__all_common__'
 
 const G = {
-  dark:    '#2E7D32',
+  dark: '#2E7D32',
   primary: '#43A047',
-  light:   '#E8F5E9',
-  border:  '#C8DCC8',
-  text:    '#1B3318',
-  text2:   '#4A6B4A',
-  dim:     '#9EBB9E',
+  light: '#E8F5E9',
+  border: '#C8DCC8',
+  text: '#1B3318',
+  text2: '#4A6B4A',
+  dim: '#9EBB9E',
 }
 
 const JOIN_TYPES = [
-  { value: 'LEFT JOIN',       label: 'Izquierda',    desc: 'Todos de A + coincidencias de B',   icon: '⟵' },
-  { value: 'INNER JOIN',      label: 'Intersección', desc: 'Solo filas que coinciden en ambos', icon: '⋈' },
-  { value: 'FULL OUTER JOIN', label: 'Completo',     desc: 'Todos de A y B, rellenando nulos',  icon: '⟷' },
-  { value: 'RIGHT JOIN',      label: 'Derecha',      desc: 'Todos de B + coincidencias de A',   icon: '⟶' },
+  { value: 'LEFT JOIN', label: 'Izquierda', desc: 'Todos de A + coincidencias de B', icon: '⟵' },
+  { value: 'INNER JOIN', label: 'Intersección', desc: 'Solo filas que coinciden en ambos', icon: '⋈' },
+  { value: 'FULL OUTER JOIN', label: 'Completo', desc: 'Todos de A y B, rellenando nulos', icon: '⟷' },
+  { value: 'RIGHT JOIN', label: 'Derecha', desc: 'Todos de B + coincidencias de A', icon: '⟶' },
 ]
 
 const AGG_OPS = [
-  { value: 'none',  label: 'Sin agregación',       desc: 'Ver todas las filas resultado',      icon: '📋' },
-  { value: 'count', label: 'Contar coincidencias', desc: 'Cuántos registros coinciden',        icon: '🔢' },
-  { value: 'sum',   label: 'Sumar columna',        desc: 'Suma total de una columna numérica', icon: '∑' },
-  { value: 'avg',   label: 'Promedio de columna',  desc: 'Promedio de una columna numérica',   icon: '〒' },
-  { value: 'both',  label: 'Suma + Promedio',      desc: 'Suma y promedio de la columna',      icon: '📊' },
+  { value: 'none', label: 'Sin agregación', desc: 'Ver todas las filas resultado', icon: '📋' },
+  { value: 'count', label: 'Contar coincidencias', desc: 'Cuántos registros coinciden', icon: '🔢' },
+  { value: 'sum', label: 'Sumar columna', desc: 'Suma total de una columna numérica', icon: '∑' },
+  { value: 'avg', label: 'Promedio de columna', desc: 'Promedio de una columna numérica', icon: '〒' },
+  { value: 'both', label: 'Suma + Promedio', desc: 'Suma y promedio de la columna', icon: '📊' },
 ]
 
-const JOIN_MODES = [
-  { value: 'join_columns', label: 'Cruzar por columnas', desc: 'Usar una columna de enlace común', icon: '🔗' },
-  { value: 'cross_all',    label: 'Cruzar todo',        desc: 'Producto cartesiano de todos los registros', icon: '✕' },
+const STRATEGY_PRESETS = [
+  {
+    key: 'safe',
+    title: 'Seguro',
+    desc: 'Menor riesgo y máxima trazabilidad',
+    icon: '🛡',
+    joinType: 'LEFT JOIN',
+    aggOp: 'none',
+  },
+  {
+    key: 'fast',
+    title: 'Rápido',
+    desc: 'Solo coincidencias para análisis inmediato',
+    icon: '⚡',
+    joinType: 'INNER JOIN',
+    aggOp: 'count',
+  },
+  {
+    key: 'explore',
+    title: 'Explorar',
+    desc: 'Ver huecos y no coincidencias en ambos lados',
+    icon: '🧭',
+    joinType: 'FULL OUTER JOIN',
+    aggOp: 'none',
+  },
 ]
 
-const MAX_JOIN_ROWS = 50000
-
-function buildJoinProjection(leftTable, rightTable, leftCols, rightCols, joinCol, rightJoinCol) {
-  const leftProjection = (leftCols || []).map((column) => `a."${column.name}" AS "${leftTable}.${column.name}"`)
-  const rightProjection = (rightCols || []).map((column) => `b."${column.name}" AS "${rightTable}.${column.name}"`)
-  const matchFlag = `CASE WHEN a."${joinCol}" IS NOT NULL AND b."${rightJoinCol}" IS NOT NULL THEN 'coincide' ELSE 'sin_coincidencia' END AS "estado_cruce"`
-  return [matchFlag, ...leftProjection, ...rightProjection].join(',\n       ')
+function normalizeName(value) {
+  return String(value || '').trim().toLowerCase()
 }
 
-function buildSQL({ leftTable, rightTable, leftCols, rightCols, joinCol, rightJoinCol, joinType, aggOp, aggCol, groupBy, joinMode = 'join_columns' }) {
-  if (!leftTable || !rightTable) return null
-  
-  // ── CROSS JOIN (cruzar todo sin columnas de enlace) ──
-  if (joinMode === 'cross_all') {
-    const al = 'a', ar = 'b'
-    const leftProjection = (leftCols || []).map((col) => `${al}."${col.name}" AS "${leftTable}.${col.name}"`)
-    const rightProjection = (rightCols || []).map((col) => `${ar}."${col.name}" AS "${rightTable}.${col.name}"`)
-    const projection = [...leftProjection, ...rightProjection].join(',\n       ')
-    return (
-      `SELECT ${projection}\n` +
-      `FROM "${leftTable}" ${al}\n` +
-      `CROSS JOIN "${rightTable}" ${ar}\n` +
-      `LIMIT ${MAX_JOIN_ROWS};`
-    )
+function getCommonColumnPairs(leftCols = [], rightCols = []) {
+  return leftCols
+    .map((left) => {
+      const right = rightCols.find((candidate) => normalizeName(candidate.name) === normalizeName(left.name))
+      return right ? { left: left.name, right: right.name } : null
+    })
+    .filter(Boolean)
+}
+
+// ─── Smart Join: predicción semántica de FK ───────────────────────────────────
+const ID_KEYWORDS = ['id', 'ium', 'codigo', 'código', 'clave', 'cedula', 'cédula', 'nit', 'serial', 'ref', 'numero', 'número', 'cod', 'key', 'folio', 'placa', 'cuenta', 'expediente']
+
+function scoreJoinPair(lc, rc) {
+  const l = (lc.name || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+  const r = (rc.name || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+  let score = 0
+  if (l === r) score += 70
+  else if (l.includes(r) || r.includes(l)) score += 35
+  const lKey = ID_KEYWORDS.some(kw => l.includes(kw))
+  const rKey = ID_KEYWORDS.some(kw => r.includes(kw))
+  if (lKey && rKey) score += 25
+  else if (lKey || rKey) score += 8
+  if (lc.type && rc.type && lc.type === rc.type) score += 10
+  return score
+}
+
+function predictBestJoinPair(leftCols, rightCols) {
+  if (!leftCols?.length || !rightCols?.length) return null
+  let best = null, bestScore = 0
+  for (const lc of leftCols) {
+    for (const rc of rightCols) {
+      const s = scoreJoinPair(lc, rc)
+      if (s > bestScore) { bestScore = s; best = { left: lc.name, right: rc.name, score: s } }
+    }
   }
-  
-  // ── JOIN CON COLUMNAS (modo normal) ──
-  if (!joinCol || !rightJoinCol) return null
-  const al = 'a', ar = 'b'
+  if (!best || bestScore < 25) return null
+  const confidence = bestScore >= 70 ? 'alta' : bestScore >= 35 ? 'media' : 'baja'
+  const confColor = confidence === 'alta' ? '#1B5E20' : confidence === 'media' ? '#E65100' : '#9E9E9E'
+  return { ...best, confidence, confColor, score: bestScore }
+}
+
+function buildJoinProjection(leftTable, rightTable, leftCols, rightCols, matchPairs, wholeFileMatch) {
+  const leftColNames = new Set((leftCols || []).map(c => c.name))
+
+  // Columnas de tabla A: nombre original (sin prefijo)
+  const leftProjection = (leftCols || []).map((col) => `a."${col.name}"`)
+
+  // Columnas de tabla B: prefijo "B_" solo si hay conflicto con tabla A
+  const rightProjection = (rightCols || []).map((col) => {
+    if (leftColNames.has(col.name)) {
+      return `b."${col.name}" AS "B_${col.name}"`
+    }
+    return `b."${col.name}"`
+  })
+
+  // Indicador de coincidencia — claro y en español
+  const checks = wholeFileMatch
+    ? matchPairs.map(({ left, right }) => `a."${left}" IS NOT NULL AND b."${right}" IS NOT NULL`).join(' AND ')
+    : `a."${matchPairs[0]?.left}" IS NOT NULL AND b."${matchPairs[0]?.right}" IS NOT NULL`
+  const flag = `CASE WHEN ${checks} THEN 'SI' ELSE 'NO' END AS "Coincide"`
+
+  return [flag, ...leftProjection, ...rightProjection].join(',\n       ')
+}
+
+function buildNormalizedExpr(alias, col, rules = {}) {
+  const base = `CAST(${alias}."${col}" AS VARCHAR)`
+  const trimmed = rules.trimValues ? `TRIM(${base})` : base
+  const upper = rules.upperValues ? `UPPER(${trimmed})` : trimmed
+  if (rules.alnumOnly) return `REGEXP_REPLACE(${upper}, '[^A-Z0-9]', '', 'g')`
+  return upper
+}
+
+function buildJoinCondition(matchPairs, rules) {
+  return matchPairs
+    .map(({ left, right }) => `${buildNormalizedExpr('a', left, rules)} = ${buildNormalizedExpr('b', right, rules)}`)
+    .join('\n  AND ')
+}
+
+function buildSQL({ leftTable, rightTable, leftCols, rightCols, joinType, aggOp, aggCol, groupBy, wholeFileMatch, matchPairs, normalizeRules }) {
+  if (!leftTable || !rightTable || !matchPairs.length) return null
+
+  const joinCondition = buildJoinCondition(matchPairs, normalizeRules)
 
   if (aggOp === 'none') {
-    return (
-      `SELECT ${buildJoinProjection(leftTable, rightTable, leftCols, rightCols, joinCol, rightJoinCol)}\n` +
-      `FROM "${leftTable}" ${al}\n` +
-      `${joinType} "${rightTable}" ${ar}\n` +
-      `  ON TRIM(CAST(${al}."${joinCol}" AS VARCHAR)) = TRIM(CAST(${ar}."${rightJoinCol}" AS VARCHAR))\n` +
-      `LIMIT ${MAX_JOIN_ROWS};`
-    )
+    return [
+      `SELECT ${buildJoinProjection(leftTable, rightTable, leftCols, rightCols, matchPairs, wholeFileMatch)}`,
+      `FROM "${leftTable}" a`,
+      `${joinType} "${rightTable}" b`,
+      `  ON ${joinCondition}`,
+      `LIMIT ${MAX_JOIN_ROWS};`,
+    ].join('\n')
   }
-  const groupCol = groupBy ? `${al}."${groupBy}"` : `${al}."${joinCol}"`
-  let sel = groupCol
-  if (aggOp === 'count')                sel += `, COUNT(*) AS coincidencias`
-  else if (aggOp === 'sum'  && aggCol)  sel += `, SUM(${ar}."${aggCol}") AS suma_${aggCol.replace(/[^a-z0-9]/gi,'_')}`
-  else if (aggOp === 'avg'  && aggCol)  sel += `, AVG(${ar}."${aggCol}") AS promedio_${aggCol.replace(/[^a-z0-9]/gi,'_')}`
-  else if (aggOp === 'both' && aggCol)  sel +=
-    `, SUM(${ar}."${aggCol}") AS suma_${aggCol.replace(/[^a-z0-9]/gi,'_')}` +
-    `, AVG(${ar}."${aggCol}") AS promedio_${aggCol.replace(/[^a-z0-9]/gi,'_')}`
 
-  return (
-    `SELECT ${sel}\n` +
-    `FROM "${leftTable}" ${al}\n` +
-    `${joinType} "${rightTable}" ${ar}\n` +
-    `  ON TRIM(CAST(${al}."${joinCol}" AS VARCHAR)) = TRIM(CAST(${ar}."${rightJoinCol}" AS VARCHAR))\n` +
-    `GROUP BY ${groupCol}\n` +
-    `ORDER BY 2 DESC\n` +
-    `LIMIT ${MAX_JOIN_ROWS};`
-  )
+  const baseGroup = groupBy || matchPairs[0]?.left
+  if (!baseGroup) return null
+
+  let selectSql = `a."${baseGroup}"`
+  if (aggOp === 'count') selectSql += ', COUNT(*) AS coincidencias'
+  if (aggOp === 'sum' && aggCol) selectSql += `, SUM(b."${aggCol}") AS suma_${aggCol.replace(/[^a-z0-9]/gi, '_')}`
+  if (aggOp === 'avg' && aggCol) selectSql += `, AVG(b."${aggCol}") AS promedio_${aggCol.replace(/[^a-z0-9]/gi, '_')}`
+  if (aggOp === 'both' && aggCol) {
+    const safe = aggCol.replace(/[^a-z0-9]/gi, '_')
+    selectSql += `, SUM(b."${aggCol}") AS suma_${safe}, AVG(b."${aggCol}") AS promedio_${safe}`
+  }
+
+  return [
+    `SELECT ${selectSql}`,
+    `FROM "${leftTable}" a`,
+    `${joinType} "${rightTable}" b`,
+    `  ON ${joinCondition}`,
+    `GROUP BY a."${baseGroup}"`,
+    `ORDER BY 2 DESC`,
+    `LIMIT ${MAX_JOIN_ROWS};`,
+  ].join('\n')
 }
 
 function Section({ num, title, children }) {
   return (
     <section>
-      <div className="flex items-center gap-2 mb-3">
-        <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0"
-          style={{ background: G.primary }}>
+      <div className="mb-3 flex items-center gap-2">
+        <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white" style={{ background: G.primary }}>
           {num}
         </div>
         <span className="text-xs font-bold uppercase tracking-widest" style={{ color: G.dark }}>{title}</span>
@@ -112,207 +192,394 @@ function Section({ num, title, children }) {
   )
 }
 
-export default function CrossWizard({ tables, onClose, onResult }) {
-  const [leftTable,    setLeftTable]    = useState(tables[0]?.name || '')
-  const [rightTable,   setRightTable]   = useState(tables[1]?.name || '')
-  const [joinMode,     setJoinMode]     = useState('join_columns')
-  const [joinCol,      setJoinCol]      = useState('')
-  const [rightJoinCol, setRightJoinCol] = useState('')
-  const [joinType,     setJoinType]     = useState('LEFT JOIN')
-  const [aggOp,        setAggOp]        = useState('none')
-  const [aggCol,       setAggCol]       = useState('')
-  const [groupBy,      setGroupBy]      = useState('')
-  const [postAction,   setPostAction]   = useState('only_result')
-  const [targetTable,  setTargetTable]  = useState('')
-  const [newTableName, setNewTableName] = useState('resultado_cruce')
-  const [isRunning,    setIsRunning]    = useState(false)
-  const [error,        setError]        = useState(null)
-  const [warnings,     setWarnings]     = useState([])
-
-  const leftMeta  = tables.find(t => t.name === leftTable)
-  const rightMeta = tables.find(t => t.name === rightTable)
-  const leftCols  = leftMeta?.columns  || []
-  const rightCols = rightMeta?.columns || []
-  const numericRightCols = rightCols.filter(c => {
-    const tp = (c.type || '').toUpperCase()
-    return ['INTEGER','BIGINT','DOUBLE','FLOAT','DECIMAL','NUMERIC','HUGEINT','UBIGINT','SMALLINT','TINYINT'].some(n => tp.includes(n))
+function buildColumnOptions(columns, commonPairs, side) {
+  const options = []
+  if (commonPairs.length) {
+    options.push({ value: MATCH_ALL, label: `Todo el archivo (${commonPairs.length} columna(s) comunes)` })
+  }
+  columns.forEach((column) => {
+    const isCommon = commonPairs.some((pair) => pair[side] === column.name)
+    options.push({
+      value: column.name,
+      label: `${column.name} (${column.type})${isCommon ? ' · comun' : ''}`,
+    })
   })
+  return options
+}
+
+export default function CrossWizard({ tables, onClose, onResult, onAskAssistant }) {
+  const [leftTable, setLeftTable] = useState(tables[0]?.name || '')
+  const [rightTable, setRightTable] = useState(tables[1]?.name || '')
+  const [joinCol, setJoinCol] = useState('')
+  const [rightJoinCol, setRightJoinCol] = useState('')
+  const [joinType, setJoinType] = useState('LEFT JOIN')
+  const [aggOp, setAggOp] = useState('none')
+  const [aggCol, setAggCol] = useState('')
+  const [groupBy, setGroupBy] = useState('')
+  const [postAction, setPostAction] = useState('only_result')
+  const [targetTable, setTargetTable] = useState('')
+  const [isRunning, setIsRunning] = useState(false)
+  const [error, setError] = useState(null)
+  const [aiSuggestion, setAiSuggestion] = useState(null)
+  const [joinHealth, setJoinHealth] = useState(null)
+  const [activePreset, setActivePreset] = useState('safe')
+  const [sqlOpen, setSqlOpen] = useState(false)
+  const [normalizeRules, setNormalizeRules] = useState({ trimValues: true, upperValues: false, alnumOnly: false })
+  const [simState, setSimState] = useState({ running: false, step: 0 })
 
   useEffect(() => {
-    const w = []
-    
-    // Detectar si tablas son muy grandes
-    if ((leftMeta?.rowCount || 0) > 100000) w.push('⚠️ Archivo A es muy grande. Considera usar INNER JOIN para reducir filas.')
-    if ((rightMeta?.rowCount || 0) > 100000) w.push('⚠️ Archivo B es muy grande. Considera usar INNER JOIN para reducir filas.')
-    
-    // Advertencia para CROSS JOIN
-    if (joinMode === 'cross_all') {
-      const totalRows = (leftMeta?.rowCount || 0) * (rightMeta?.rowCount || 0)
-      if (totalRows > MAX_JOIN_ROWS) w.push(`⚠️ CROSS JOIN generaría ${totalRows.toLocaleString()} filas (límite: ${MAX_JOIN_ROWS.toLocaleString()}). Resultado limitado.`)
-      if (totalRows > 1000000) w.push('🔴 CROSS JOIN de archivos muy grandes puede fallar por memoria.')
+    if (!tables?.length) return
+    const names = tables.map(t => t.name)
+    if (!names.includes(leftTable)) setLeftTable(names[0] || '')
+    if (!names.includes(rightTable) || rightTable === leftTable) {
+      const alt = names.find(n => n !== (leftTable || names[0])) || names[1] || ''
+      setRightTable(alt)
     }
-    
-    setWarnings(w)
-    
-    // Auto-detectar columnas comunes en modo join_columns
-    if (joinMode === 'join_columns' && (!joinCol || !rightJoinCol)) {
-      if (!leftCols.length || !rightCols.length) return
-      const common = leftCols.find(c => rightCols.some(rc => rc.name.toLowerCase() === c.name.toLowerCase()))
-      if (common) {
-        setJoinCol(common.name)
-        const rMatch = rightCols.find(rc => rc.name.toLowerCase() === common.name.toLowerCase())
-        setRightJoinCol(rMatch?.name || '')
-      }
-    }
-    
-    setAggCol(numericRightCols[0]?.name || '')
-  }, [leftTable, rightTable, joinMode, leftCols, rightCols, numericRightCols, leftMeta?.rowCount, rightMeta?.rowCount])
+  }, [tables, leftTable, rightTable])
+
+  const leftMeta = tables.find((table) => table.name === leftTable)
+  const rightMeta = tables.find((table) => table.name === rightTable)
+  const leftCols = leftMeta?.columns || []
+  const rightCols = rightMeta?.columns || []
+  const commonPairs = useMemo(() => getCommonColumnPairs(leftCols, rightCols), [leftCols, rightCols])
+  const wholeFileMatch = joinCol === MATCH_ALL && rightJoinCol === MATCH_ALL
+  const matchPairs = wholeFileMatch ? commonPairs : (joinCol && rightJoinCol ? [{ left: joinCol, right: rightJoinCol }] : [])
+  const leftOptions = useMemo(() => buildColumnOptions(leftCols, commonPairs, 'left'), [leftCols, commonPairs])
+  const rightOptions = useMemo(() => buildColumnOptions(rightCols, commonPairs, 'right'), [rightCols, commonPairs])
+  const numericRightCols = useMemo(() => rightCols.filter((column) => {
+    const type = String(column.type || '').toUpperCase()
+    return ['INTEGER', 'BIGINT', 'DOUBLE', 'FLOAT', 'DECIMAL', 'NUMERIC', 'HUGEINT', 'UBIGINT', 'SMALLINT', 'TINYINT'].some((name) => type.includes(name))
+  }), [rightCols])
 
   useEffect(() => {
     setTargetTable(leftTable || '')
   }, [leftTable])
 
+  useEffect(() => {
+    setError(null)
+    if (!leftTable || !rightTable || leftTable === rightTable) return
+    if (!commonPairs.length) {
+      setJoinCol('')
+      setRightJoinCol('')
+      return
+    }
+    if (!joinCol || !rightJoinCol) {
+      setJoinCol(MATCH_ALL)
+      setRightJoinCol(MATCH_ALL)
+    }
+  }, [leftTable, rightTable, commonPairs, joinCol, rightJoinCol])
+
+  // Smart Join: predicción automática de FK al cambiar tablas
+  useEffect(() => {
+    if (!leftTable || !rightTable || leftTable === rightTable) { setAiSuggestion(null); return }
+    const pred = predictBestJoinPair(leftCols, rightCols)
+    setAiSuggestion(pred)
+    // Auto-seleccionar si la confianza es alta y no hay selección previa
+    if (pred && pred.confidence === 'alta' && !joinCol) {
+      setJoinCol(pred.left)
+      setRightJoinCol(pred.right)
+    }
+  }, [leftTable, rightTable, leftCols, rightCols]) // eslint-disable-line
+
+  useEffect(() => {
+    if (!aggCol && numericRightCols.length) setAggCol(numericRightCols[0].name)
+  }, [aggCol, numericRightCols])
+
+  const warnings = useMemo(() => {
+    const next = []
+    if (!commonPairs.length) next.push('Estos archivos no tienen columnas con el mismo nombre. Necesitas campos equivalentes para cruzarlos.')
+    if (wholeFileMatch && commonPairs.length) next.push(`Se cruzaran usando todas las columnas comunes: ${commonPairs.map((pair) => pair.left).join(', ')}`)
+    if ((leftMeta?.rowCount || 0) > 100000 || (rightMeta?.rowCount || 0) > 100000) next.push('Archivos grandes detectados. Si tarda, filtra primero o usa Intersección.')
+    return next
+  }, [commonPairs, wholeFileMatch, leftMeta?.rowCount, rightMeta?.rowCount])
+
   const sqlPreview = useMemo(
-    () => buildSQL({ leftTable, rightTable, leftCols, rightCols, joinCol, rightJoinCol, joinType, aggOp, aggCol, groupBy, joinMode }),
-    [leftTable, rightTable, leftCols, rightCols, joinCol, rightJoinCol, joinType, aggOp, aggCol, groupBy, joinMode]
+    () => buildSQL({ leftTable, rightTable, leftCols, rightCols, joinType, aggOp, aggCol, groupBy, wholeFileMatch, matchPairs, normalizeRules }),
+    [leftTable, rightTable, leftCols, rightCols, joinType, aggOp, aggCol, groupBy, wholeFileMatch, matchPairs, normalizeRules]
   )
 
-  const needsAggCol = ['sum','avg','both'].includes(aggOp)
-  const needsTarget = postAction === 'replace_main'
-  const needsName = postAction === 'new_tab' || postAction === 'new_file'
-  
-  const canExecute = 
-    leftTable && rightTable && leftTable !== rightTable && 
-    (joinMode === 'cross_all' || (joinCol && rightJoinCol)) &&
-    (!needsAggCol || aggCol) && 
-    (!needsTarget || targetTable) && 
-    (!needsName || newTableName.trim())
+  const needsAggCol = ['sum', 'avg', 'both'].includes(aggOp)
+  const needsTarget = postAction === 'replace_main' || postAction === 'append_to_table'
+  const canExecute = Boolean(
+    leftTable &&
+    rightTable &&
+    leftTable !== rightTable &&
+    matchPairs.length &&
+    (!needsAggCol || aggCol) &&
+    (!needsTarget || targetTable)
+  )
+
+  const assistantPrompts = useMemo(() => {
+    if (!leftTable || !rightTable) return []
+    const base = wholeFileMatch
+      ? `Cruza ${leftTable} con ${rightTable} por todas las columnas comunes`
+      : `Cruza ${leftTable} con ${rightTable} por ${joinCol || 'columna A'} y ${rightJoinCol || 'columna B'}`
+    return [
+      `Diagnostica este cruce: ${base}. Quiero causas probables de baja coincidencia y plan de limpieza.`,
+      `Propón la mejor estrategia para subir el match entre ${leftTable} y ${rightTable} sin perder filas clave.`,
+      `Explícame qué tipo de cruce conviene (${joinType}) para ${leftTable} y ${rightTable} y por qué.`,
+    ]
+  }, [leftTable, rightTable, wholeFileMatch, joinCol, rightJoinCol, joinType])
+
+  const stepState = useMemo(() => {
+    const s1 = Boolean(leftTable && rightTable && leftTable !== rightTable)
+    const s2 = Boolean(matchPairs.length)
+    const s3 = Boolean(joinType)
+    const s4 = Boolean(!needsAggCol || aggCol)
+    const s5 = Boolean(!needsTarget || targetTable)
+    const done = [s1, s2, s3, s4, s5].filter(Boolean).length
+    return { s1, s2, s3, s4, s5, done, pct: Math.round((done / 5) * 100) }
+  }, [leftTable, rightTable, matchPairs.length, joinType, needsAggCol, aggCol, needsTarget, targetTable])
+
+  const applyPreset = useCallback((preset) => {
+    setJoinType(preset.joinType)
+    setAggOp(preset.aggOp)
+    setActivePreset(preset.key)
+  }, [])
+
+  const comparisonStats = useMemo(() => {
+    const common = commonPairs.length
+    return {
+      leftRows: leftMeta?.rowCount || 0,
+      rightRows: rightMeta?.rowCount || 0,
+      leftCols: leftCols.length,
+      rightCols: rightCols.length,
+      common,
+      density: (leftCols.length && rightCols.length)
+        ? Math.round((common / Math.min(leftCols.length, rightCols.length)) * 100)
+        : 0,
+    }
+  }, [commonPairs.length, leftMeta?.rowCount, rightMeta?.rowCount, leftCols.length, rightCols.length])
+
+  const runSimulation = useCallback(() => {
+    if (simState.running || !leftTable || !rightTable || !matchPairs.length) return
+    setSimState({ running: true, step: 0 })
+    setTimeout(() => setSimState({ running: true, step: 1 }), 350)
+    setTimeout(() => setSimState({ running: true, step: 2 }), 800)
+    setTimeout(() => setSimState({ running: true, step: 3 }), 1250)
+    setTimeout(() => setSimState({ running: false, step: 3 }), 1550)
+  }, [simState.running, leftTable, rightTable, matchPairs.length])
+
+  // Estimador rápido de calidad del cruce (muestra pequeña para respuesta inmediata)
+  useEffect(() => {
+    let alive = true
+    async function estimateJoinHealth() {
+      if (!leftTable || !rightTable || !matchPairs.length) {
+        if (alive) setJoinHealth(null)
+        return
+      }
+      try {
+        const cond = buildJoinCondition(matchPairs, normalizeRules)
+        const sampleLimit = 1200
+        const sql = [
+          'WITH sample_a AS (',
+          `  SELECT * FROM "${leftTable}" LIMIT ${sampleLimit}`,
+          '),',
+          'stats AS (',
+          '  SELECT',
+          '    COUNT(*) AS total_a,',
+          `    COUNT(*) FILTER (WHERE b."${matchPairs[0].right}" IS NOT NULL) AS matched_a`,
+          '  FROM sample_a a',
+          `  ${joinType} "${rightTable}" b`,
+          `    ON ${cond}`,
+          ')',
+          'SELECT total_a, matched_a FROM stats;',
+        ].join('\n')
+        const res = await executeQuery(sql)
+        if (!alive) return
+        const totalA = Number(res?.rows?.[0]?.total_a || 0)
+        const matchedA = Number(res?.rows?.[0]?.matched_a || 0)
+        const pct = totalA > 0 ? Math.round((matchedA / totalA) * 100) : 0
+        const level = pct >= 85 ? 'alta' : pct >= 60 ? 'media' : 'baja'
+        setJoinHealth({ totalA, matchedA, pct, level })
+      } catch {
+        if (alive) setJoinHealth(null)
+      }
+    }
+    estimateJoinHealth()
+    return () => { alive = false }
+  }, [leftTable, rightTable, joinType, matchPairs, normalizeRules])
 
   async function handleExecute() {
     if (!canExecute || !sqlPreview) return
     setIsRunning(true)
     setError(null)
     try {
-      const res = await executeQuery(sqlPreview)
-      
-      if (!res || !res.rows) {
-        setError('Error: Respuesta inválida del motor de base de datos.')
-        setIsRunning(false)
-        return
-      }
-      
-      const stats = (res.rows || []).reduce((acc, row) => {
-        if (row.estado_cruce === 'coincide') acc.matched += 1
-        else if (row.estado_cruce === 'sin_coincidencia') acc.unmatched += 1
+      const result = await executeQuery(sqlPreview)
+      const stats = (result.rows || []).reduce((acc, row) => {
+        if (row['Coincide'] === 'SI') acc.matched += 1
+        if (row['Coincide'] === 'NO') acc.unmatched += 1
         return acc
       }, { matched: 0, unmatched: 0 })
-      
-      const joinLabel = JOIN_TYPES.find(j => j.value === joinType)?.label || joinType
-      const aggLabel  = AGG_OPS.find(a  => a.value === aggOp)?.label  || aggOp
-      
-      const crossContext = {
-        leftTable, rightTable, joinCol, rightJoinCol,
-        joinType, joinLabel, aggOp, aggLabel,
-        aggCol: needsAggCol ? aggCol : null,
-        sql: sqlPreview,
-        rowCount: res.rowCount,
-        matchedRows: stats.matched,
-        unmatchedRows: stats.unmatched,
-        limited: res.rowCount >= MAX_JOIN_ROWS,
-        postAction,
-        targetTable,
-        newTableName: newTableName.trim(),
-        joinMode,
-      }
-      
-      if (onResult) onResult({ ...res, duration: '—', crossContext })
+
+      onResult?.({
+        ...result,
+        duration: '—',
+        crossContext: {
+          leftTable,
+          rightTable,
+          joinType,
+          joinLabel: JOIN_TYPES.find((item) => item.value === joinType)?.label || joinType,
+          aggOp,
+          aggLabel: AGG_OPS.find((item) => item.value === aggOp)?.label || aggOp,
+          aggCol: needsAggCol ? aggCol : null,
+          joinCol: wholeFileMatch ? 'Todo el archivo' : joinCol,
+          rightJoinCol: wholeFileMatch ? 'Todo el archivo' : rightJoinCol,
+          wholeFileMatch,
+          matchPairs,
+          sql: sqlPreview,
+          rowCount: result.rowCount,
+          matchedRows: stats.matched,
+          unmatchedRows: stats.unmatched,
+          limited: result.rowCount >= MAX_JOIN_ROWS,
+          postAction,
+          targetTable,
+        },
+      })
       onClose()
-    } catch (e) {
-      const msg = e.message || String(e)
-      console.error('[CrossWizard Error]', msg, e)
-      
-      if (msg.includes('malloc') || msg.includes('Out of Memory') || msg.toLowerCase().includes('oom')) {
-        setError(`Los archivos son demasiado grandes para cruzarlos directamente.\n\nSugerencias:\n• Usa "Intersección" (INNER JOIN) para reducir resultados\n• Limita los registros antes del cruce\n• Usa CROSS JOIN solo si es necesario`)
-      } else if (msg.includes('Column name not found') || msg.includes('column does not exist')) {
-        setError('❌ Columna no encontrada. Verifica que las columnas de enlace existan en ambos archivos.')
-      } else if (msg.includes('Catalog Error')) {
-        setError('❌ Error de tabla. Verifica que los archivos no hayan sido eliminados.')
+    } catch (caught) {
+      const message = caught?.message || String(caught)
+      if (message.toLowerCase().includes('oom') || message.toLowerCase().includes('out of memory') || message.includes('malloc')) {
+        setError('El cruce superó la memoria disponible. Reduce filas, filtra antes o usa Intersección.')
       } else {
-        setError('Error al ejecutar el cruce:\n' + msg.slice(0, 150) + (msg.length > 150 ? '...' : ''))
+        setError(`No pude ejecutar el cruce. ${message}`)
       }
     } finally {
       setIsRunning(false)
     }
   }
 
-  const selectSt = {
-    width: '100%', padding: '8px 12px', borderRadius: 8, fontSize: '0.8rem',
-    background: '#fff', border: `1px solid ${G.border}`, outline: 'none',
-    color: G.text, fontFamily: 'Inter, sans-serif',
+  const selectStyle = {
+    width: '100%',
+    padding: '8px 12px',
+    borderRadius: 8,
+    fontSize: '0.8rem',
+    background: '#fff',
+    border: `1px solid ${G.border}`,
+    outline: 'none',
+    color: G.text,
+    fontFamily: 'Inter, sans-serif',
   }
   const cardActive = { background: G.light, border: `1px solid ${G.primary}`, cursor: 'pointer' }
-  const cardIdle   = { background: '#fff',  border: `1px solid ${G.border}`,  cursor: 'pointer' }
+  const cardIdle = { background: '#fff', border: `1px solid ${G.border}`, cursor: 'pointer' }
 
   return (
-    <motion.div
-      key="cross-backdrop"
-      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(6px)' }}
-      onClick={e => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <motion.div
-        initial={{ scale: 0.9, opacity: 0, y: 30 }}
-        animate={{ scale: 1, opacity: 1, y: 0 }}
-        exit={{ scale: 0.9, opacity: 0, y: 30 }}
-        transition={spring}
-        className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl flex flex-col"
-        style={{ background: '#F4F7F4', boxShadow: '0 24px 60px rgba(0,0,0,0.25)', border: `1px solid ${G.border}` }}
-        onClick={e => e.stopPropagation()}
-      >
-        {/* ── Header verde ── */}
-        <div className="flex items-center justify-between px-6 py-4 shrink-0"
-          style={{ background: G.dark, borderRadius: '16px 16px 0 0' }}>
+    <motion.div key="cross-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(6px)' }} onClick={(event) => { if (event.target === event.currentTarget) onClose() }}>
+      <motion.div initial={{ scale: 0.94, opacity: 0, y: 24 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.96, opacity: 0, y: 16 }} transition={spring} className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-y-auto rounded-2xl" style={{ background: '#F4F7F4', boxShadow: '0 24px 60px rgba(0,0,0,0.25)', border: `1px solid ${G.border}` }} onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center justify-between px-6 py-4" style={{ background: G.dark }}>
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center text-lg"
-              style={{ background: 'rgba(255,255,255,0.15)' }}>⋈</div>
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg text-lg" style={{ background: 'rgba(255,255,255,0.15)' }}>⋈</div>
             <div>
-              <h2 className="font-bold text-sm text-white">Asistente de Cruce de Archivos</h2>
-              <p className="text-xs" style={{ color: 'rgba(255,255,255,0.65)' }}>
-                Configura el cruce — los resultados aparecerán en el área principal
-              </p>
+              <h2 className="text-sm font-bold text-white">Asistente de Cruce de Archivos</h2>
+              <p className="text-xs" style={{ color: 'rgba(255,255,255,0.7)' }}>Cruce por columnas o por todo el archivo usando columnas comunes</p>
             </div>
           </div>
-          <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={onClose}
-            className="w-7 h-7 rounded-full flex items-center justify-center text-xs"
-            style={{ background: 'rgba(255,255,255,0.15)', color: 'white' }}>✕
-          </motion.button>
+          <button onClick={onClose} className="flex h-7 w-7 items-center justify-center rounded-full text-xs text-white" style={{ background: 'rgba(255,255,255,0.15)' }}>✕</button>
         </div>
 
-        <div className="p-6 flex flex-col gap-5">
+        <div className="flex flex-col gap-5 p-6">
+          <section className="rounded-2xl border p-4" style={{ borderColor: G.border, background: 'linear-gradient(130deg, #FFFFFF, #F7FBF7)' }}>
+            <div className="mb-3 text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: G.dim }}>Comparación visual A vs B</div>
+            <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+              <div className="rounded-xl border px-3 py-3" style={{ borderColor: G.border, background: '#fff' }}>
+                <div className="text-xs font-bold truncate" style={{ color: G.dark }}>{leftTable || 'Tabla A'}</div>
+                <div className="mt-1 text-[11px]" style={{ color: G.dim }}>{comparisonStats.leftRows.toLocaleString()} filas · {comparisonStats.leftCols} cols</div>
+              </div>
+              <div className="text-center text-lg">⋈</div>
+              <div className="rounded-xl border px-3 py-3" style={{ borderColor: G.border, background: '#fff' }}>
+                <div className="text-xs font-bold truncate" style={{ color: G.dark }}>{rightTable || 'Tabla B'}</div>
+                <div className="mt-1 text-[11px]" style={{ color: G.dim }}>{comparisonStats.rightRows.toLocaleString()} filas · {comparisonStats.rightCols} cols</div>
+              </div>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+              <div className="rounded-lg border px-3 py-2" style={{ borderColor: G.border, background: '#fff', color: G.text2 }}>
+                Columnas comunes: <strong style={{ color: G.dark }}>{comparisonStats.common}</strong>
+              </div>
+              <div className="rounded-lg border px-3 py-2" style={{ borderColor: G.border, background: '#fff', color: G.text2 }}>
+                Compatibilidad: <strong style={{ color: G.dark }}>{comparisonStats.density}%</strong>
+              </div>
+            </div>
+          </section>
 
-          {/* 1 · Archivos */}
+          <section className="rounded-2xl border p-4" style={{ borderColor: G.border, background: 'linear-gradient(120deg, #FFFFFF, #F1F8F3)' }}>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: G.dim }}>Ruta visual de cruce</div>
+                <div className="text-xs" style={{ color: G.text2 }}>Configura en orden y ejecuta con confianza.</div>
+              </div>
+              <div className="rounded-full px-3 py-1 text-xs font-bold" style={{ background: '#E8F5E9', color: G.dark }}>{stepState.pct}% listo</div>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full" style={{ background: '#E4EFE4' }}>
+              <motion.div
+                initial={{ width: 0 }}
+                animate={{ width: `${stepState.pct}%` }}
+                transition={{ type: 'spring', stiffness: 120, damping: 18 }}
+                style={{ height: '100%', background: 'linear-gradient(90deg, #43A047, #1B5E20)' }}
+              />
+            </div>
+            <div className="mt-3 grid grid-cols-5 gap-2 text-[10px]">
+              {[
+                ['Archivos', stepState.s1],
+                ['Enlace', stepState.s2],
+                ['Tipo', stepState.s3],
+                ['Cálculo', stepState.s4],
+                ['Destino', stepState.s5],
+              ].map(([label, ok]) => (
+                <div key={label} className="rounded-lg border px-2 py-1 text-center" style={{ borderColor: ok ? '#A5D6A7' : '#DCE8DC', background: ok ? '#F1F8F1' : '#fff', color: ok ? '#1B5E20' : G.dim }}>
+                  {ok ? '✓' : '○'} {label}
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section>
+            <div className="mb-3 flex items-center gap-2">
+              <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white" style={{ background: G.primary }}>S</div>
+              <span className="text-xs font-bold uppercase tracking-widest" style={{ color: G.dark }}>Estrategia sugerida</span>
+            </div>
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+              {STRATEGY_PRESETS.map((preset) => {
+                const selected = activePreset === preset.key
+                return (
+                  <motion.button
+                    key={preset.key}
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => applyPreset(preset)}
+                    className="rounded-xl px-3 py-2.5 text-left text-xs"
+                    style={{
+                      border: `1px solid ${selected ? '#81C784' : G.border}`,
+                      background: selected ? 'linear-gradient(135deg, #F1F8F1, #E8F5E9)' : '#fff',
+                      color: G.text,
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span style={{ fontSize: 14 }}>{preset.icon}</span>
+                      <span className="font-bold" style={{ color: selected ? G.dark : G.text }}>{preset.title}</span>
+                    </div>
+                    <div className="mt-1 text-[11px]" style={{ color: G.dim }}>{preset.desc}</div>
+                  </motion.button>
+                )
+              })}
+            </div>
+          </section>
+
           <Section num="1" title="Archivos a cruzar">
             <div className="grid grid-cols-2 gap-3">
               {[
-                { label: 'Archivo A (izquierda)', getter: leftTable,  setter: setLeftTable,  other: rightTable },
-                { label: 'Archivo B (derecha)',   getter: rightTable, setter: setRightTable, other: leftTable  },
-              ].map(({ label, getter, setter, other }) => (
-                <div key={label}>
-                  <p className="text-[10px] mb-1.5 font-semibold uppercase tracking-wider" style={{ color: G.dim }}>{label}</p>
+                { label: 'Archivo A (izquierda)', value: leftTable, setter: setLeftTable, other: rightTable },
+                { label: 'Archivo B (derecha)', value: rightTable, setter: setRightTable, other: leftTable },
+              ].map((item) => (
+                <div key={item.label}>
+                  <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider" style={{ color: G.dim }}>{item.label}</p>
                   <div className="flex flex-col gap-1.5">
-                    {tables.map(t => {
-                      const sel = t.name === getter
-                      const blocked = t.name === other
+                    {tables.map((table) => {
+                      const selected = table.name === item.value
+                      const blocked = table.name === item.other
                       return (
-                        <motion.button key={t.name}
-                          whileHover={!blocked ? { scale: 1.01 } : {}}
-                          disabled={blocked}
-                          onClick={() => setter(t.name)}
-                          className="w-full text-left px-3 py-2.5 rounded-lg transition-all text-xs"
-                          style={{ ...(sel ? cardActive : cardIdle), opacity: blocked ? 0.4 : 1, cursor: blocked ? 'not-allowed' : 'pointer' }}>
-                          <div className="font-semibold truncate" style={{ color: G.text }}>{t.name}</div>
-                          <div style={{ color: G.dim }}>{t.rowCount?.toLocaleString()} filas · {t.columns?.length} cols</div>
+                        <motion.button key={table.name} whileHover={!blocked ? { scale: 1.01 } : {}} disabled={blocked} onClick={() => item.setter(table.name)} className="w-full rounded-lg px-3 py-2.5 text-left text-xs transition-all" style={{ ...(selected ? cardActive : cardIdle), opacity: blocked ? 0.45 : 1, cursor: blocked ? 'not-allowed' : 'pointer' }}>
+                          <div className="truncate font-semibold" style={{ color: G.text }}>{table.name}</div>
+                          <div style={{ color: G.dim }}>{table.rowCount?.toLocaleString()} filas · {table.columns?.length} columnas</div>
                         </motion.button>
                       )
                     })}
@@ -322,80 +589,145 @@ export default function CrossWizard({ tables, onClose, onResult }) {
             </div>
           </Section>
 
-          {/* 2 · Modo de cruce */}
-          <Section num="2" title="¿Cómo cruzar?">
-            <div className="grid grid-cols-2 gap-2">
-              {JOIN_MODES.map(mode => {
-                const sel = joinMode === mode.value
+          <Section num="2" title="Columnas de enlace">
+            <div className="grid grid-cols-2 gap-3">
+              {aiSuggestion && (
+                <div className="col-span-2 flex items-center gap-2 px-3 py-2 rounded-lg text-xs" style={{ background: '#E8F4FD', border: '1px solid #BBDEFB' }}>
+                  <span style={{ fontSize: 13 }}>🤖</span>
+                  <div style={{ flex: 1, minWidth: 0, fontFamily: 'Inter,sans-serif' }}>
+                    <span style={{ fontWeight: 700, color: '#0D47A1' }}>IA detectó FK probable: </span>
+                    <span style={{ color: '#1565C0' }}>"{aiSuggestion.left}" ↔ "{aiSuggestion.right}"</span>
+                    <span style={{ marginLeft: 8, padding: '1px 7px', borderRadius: 10, fontSize: '0.63rem', fontWeight: 700, background: aiSuggestion.confColor, color: 'white' }}>
+                      confianza {aiSuggestion.confidence}
+                    </span>
+                  </div>
+                  {aiSuggestion.confidence !== 'alta' && (
+                    <button
+                      onClick={() => { setJoinCol(aiSuggestion.left); setRightJoinCol(aiSuggestion.right) }}
+                      style={{ padding: '3px 10px', borderRadius: 7, border: '1px solid #90CAF9', background: '#fff', color: '#0D47A1', fontSize: '0.68rem', cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap' }}
+                    >Aplicar sugerencia</button>
+                  )}
+                </div>
+              )}
+              <div>
+                <p className="mb-1.5 text-[10px] font-semibold" style={{ color: G.dim }}>Columna de A ({leftTable || 'sin seleccionar'})</p>
+                <select value={joinCol} onChange={(event) => { const next = event.target.value; setJoinCol(next); if (next === MATCH_ALL) setRightJoinCol(MATCH_ALL) }} style={selectStyle}>
+                  <option value="">— Elige columna —</option>
+                  {leftOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </div>
+              <div>
+                <p className="mb-1.5 text-[10px] font-semibold" style={{ color: G.dim }}>Columna de B ({rightTable || 'sin seleccionar'})</p>
+                <select value={rightJoinCol} onChange={(event) => { const next = event.target.value; setRightJoinCol(next); if (next === MATCH_ALL) setJoinCol(MATCH_ALL) }} style={selectStyle}>
+                  <option value="">— Elige columna —</option>
+                  {rightOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </div>
+            </div>
+          </Section>
+
+          <Section num="2.2" title="Auto-corrección de claves">
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+              {[
+                { key: 'trimValues', label: 'Recortar espacios', hint: 'TRIM' },
+                { key: 'upperValues', label: 'Ignorar mayúsculas', hint: 'UPPER' },
+                { key: 'alnumOnly', label: 'Quitar símbolos', hint: 'A-Z 0-9' },
+              ].map(opt => {
+                const on = !!normalizeRules[opt.key]
                 return (
-                  <motion.button key={mode.value} whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
-                    onClick={() => setJoinMode(mode.value)}
-                    className="text-left px-3 py-2.5 rounded-lg text-xs transition-all"
-                    style={sel ? cardActive : cardIdle}>
-                    <div className="text-base mb-0.5">{mode.icon}</div>
-                    <div className="font-bold leading-tight" style={{ color: sel ? G.dark : G.text }}>{mode.label}</div>
-                    <div className="mt-0.5 leading-snug" style={{ color: G.dim }}>{mode.desc}</div>
-                  </motion.button>
+                  <button
+                    key={opt.key}
+                    onClick={() => setNormalizeRules(prev => ({ ...prev, [opt.key]: !prev[opt.key] }))}
+                    className="rounded-xl px-3 py-2 text-left text-xs"
+                    style={{
+                      border: `1px solid ${on ? '#81C784' : G.border}`,
+                      background: on ? '#F1F8F1' : '#fff',
+                      color: on ? G.dark : G.text2,
+                    }}
+                  >
+                    <div className="font-bold">{on ? '✓' : '○'} {opt.label}</div>
+                    <div className="mt-0.5 text-[10px]" style={{ color: G.dim }}>{opt.hint}</div>
+                  </button>
                 )
               })}
             </div>
           </Section>
 
-          {/* 3 · Columnas (solo si no es CROSS JOIN) */}
-          {joinMode === 'join_columns' && (
-            <Section num="3" title="Columna de enlace">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <p className="text-[10px] mb-1.5 font-semibold" style={{ color: G.dim }}>Columna de A ({leftTable})</p>
-                  <select value={joinCol} onChange={e => setJoinCol(e.target.value)} style={selectSt}>
-                    <option value="">— Elige columna —</option>
-                    {leftCols.map(c => <option key={c.name} value={c.name}>{c.name} ({c.type})</option>)}
-                  </select>
-                </div>
-                <div>
-                  <p className="text-[10px] mb-1.5 font-semibold" style={{ color: G.dim }}>Columna de B ({rightTable})</p>
-                  <select value={rightJoinCol} onChange={e => setRightJoinCol(e.target.value)} style={selectSt}>
-                    <option value="">— Elige columna —</option>
-                    {rightCols.map(c => <option key={c.name} value={c.name}>{c.name} ({c.type})</option>)}
-                  </select>
+          <Section num="2.5" title="Copiloto de Cruce">
+            <div className="rounded-xl p-4" style={{ background: 'linear-gradient(135deg, #F1F8F3, #E8F4FD)', border: `1px solid ${G.border}` }}>
+              <div className="flex items-start gap-3">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm" style={{ background: '#1565C0', color: '#fff' }}>◈</div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-semibold" style={{ color: '#0D47A1' }}>Asistente virtual conectado al cruce</p>
+                  <p className="mt-1 text-[11px] leading-relaxed" style={{ color: '#1E3A5F' }}>
+                    Te ayudo a explicar por qué no cruza, qué columnas conviene normalizar y qué estrategia maximiza coincidencias.
+                  </p>
+                  <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
+                    {assistantPrompts.map((prompt, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => onAskAssistant?.(prompt)}
+                        className="rounded-lg px-3 py-2 text-left text-[11px] leading-snug transition-all"
+                        style={{ border: '1px solid #BBDEFB', background: '#fff', color: '#0D47A1' }}
+                      >
+                        {idx === 0 ? 'Diagnóstico automático' : idx === 1 ? 'Subir tasa de match' : 'Elegir tipo de join'}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
-            </Section>
-          )}
+              {joinHealth && (
+                <div className="mt-3 rounded-lg border px-3 py-2" style={{ borderColor: '#BFD4BF', background: '#fff' }}>
+                  <div className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: G.dim }}>Predicción rápida del cruce</div>
+                  <div className="mt-1 text-xs" style={{ color: G.text }}>
+                    Match estimado: <strong>{joinHealth.pct}%</strong> ({joinHealth.matchedA.toLocaleString()} de {joinHealth.totalA.toLocaleString()} filas muestra)
+                  </div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full" style={{ background: '#E4EFE4' }}>
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${Math.max(4, joinHealth.pct)}%` }}
+                      transition={{ type: 'spring', stiffness: 90, damping: 16 }}
+                      style={{
+                        height: '100%',
+                        background: joinHealth.level === 'alta'
+                          ? 'linear-gradient(90deg, #2E7D32, #1B5E20)'
+                          : joinHealth.level === 'media'
+                            ? 'linear-gradient(90deg, #F9A825, #E65100)'
+                            : 'linear-gradient(90deg, #EF5350, #C62828)',
+                      }}
+                    />
+                  </div>
+                  <div className="mt-1 text-[11px]" style={{ color: joinHealth.level === 'alta' ? '#1B5E20' : joinHealth.level === 'media' ? '#E65100' : '#C62828' }}>
+                    Calidad {joinHealth.level} {joinHealth.level === 'baja' ? '• recomendado: normalizar IDs y recortar espacios.' : ''}
+                  </div>
+                </div>
+              )}
+            </div>
+          </Section>
 
-          {/* 4 · Tipo de JOIN (solo si no es CROSS) */}
-          {joinMode === 'join_columns' && (
-          <Section num="4" title="Tipo de cruce">
+          <Section num="3" title="Tipo de cruce">
             <div className="grid grid-cols-2 gap-2">
-              {JOIN_TYPES.map(jt => {
-                const sel = joinType === jt.value
+              {JOIN_TYPES.map((join) => {
+                const selected = join.value === joinType
                 return (
-                  <motion.button key={jt.value} whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
-                    onClick={() => setJoinType(jt.value)}
-                    className="text-left px-3 py-2.5 rounded-lg text-xs transition-all"
-                    style={sel ? cardActive : cardIdle}>
-                    <span className="mr-1.5 text-base">{jt.icon}</span>
-                    <span className="font-bold" style={{ color: sel ? G.dark : G.text }}>{jt.label}</span>
-                    <div style={{ color: G.dim }} className="mt-0.5">{jt.desc}</div>
+                  <motion.button key={join.value} whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} onClick={() => setJoinType(join.value)} className="rounded-lg px-3 py-2.5 text-left text-xs transition-all" style={selected ? cardActive : cardIdle}>
+                    <span className="mr-1.5 text-base">{join.icon}</span>
+                    <span className="font-bold" style={{ color: selected ? G.dark : G.text }}>{join.label}</span>
+                    <div className="mt-0.5" style={{ color: G.dim }}>{join.desc}</div>
                   </motion.button>
                 )
               })}
             </div>
           </Section>
-          )}
 
-          {/* 5 · Qué calcular */}
-          <Section num={joinMode === 'join_columns' ? '5' : '4'} title="¿Qué calcular?">
+          <Section num="4" title="¿Qué calcular?">
             <div className="grid grid-cols-3 gap-2">
-              {AGG_OPS.map(op => {
-                const sel = aggOp === op.value
+              {AGG_OPS.map((op) => {
+                const selected = op.value === aggOp
                 return (
-                  <motion.button key={op.value} whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
-                    onClick={() => setAggOp(op.value)}
-                    className="text-left px-3 py-2.5 rounded-lg text-xs transition-all"
-                    style={sel ? cardActive : cardIdle}>
-                    <div className="text-base mb-0.5">{op.icon}</div>
-                    <div className="font-bold leading-tight" style={{ color: sel ? G.dark : G.text }}>{op.label}</div>
+                  <motion.button key={op.value} whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} onClick={() => setAggOp(op.value)} className="rounded-lg px-3 py-2.5 text-left text-xs transition-all" style={selected ? cardActive : cardIdle}>
+                    <div className="mb-0.5 text-base">{op.icon}</div>
+                    <div className="font-bold leading-tight" style={{ color: selected ? G.dark : G.text }}>{op.label}</div>
                     <div className="mt-0.5 leading-snug" style={{ color: G.dim }}>{op.desc}</div>
                   </motion.button>
                 )
@@ -403,23 +735,20 @@ export default function CrossWizard({ tables, onClose, onResult }) {
             </div>
             <AnimatePresence>
               {needsAggCol && (
-                <motion.div key="aggcol"
-                  initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }} className="overflow-hidden mt-3">
+                <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="mt-3 overflow-hidden">
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <p className="text-[10px] mb-1.5 font-semibold" style={{ color: G.dim }}>Columna a calcular (de B)</p>
-                      <select value={aggCol} onChange={e => setAggCol(e.target.value)} style={selectSt}>
+                      <p className="mb-1.5 text-[10px] font-semibold" style={{ color: G.dim }}>Columna numérica de B</p>
+                      <select value={aggCol} onChange={(event) => setAggCol(event.target.value)} style={selectStyle}>
                         <option value="">— Elige columna numérica —</option>
-                        {(numericRightCols.length > 0 ? numericRightCols : rightCols).map(c =>
-                          <option key={c.name} value={c.name}>{c.name} ({c.type})</option>)}
+                        {numericRightCols.map((column) => <option key={column.name} value={column.name}>{column.name} ({column.type})</option>)}
                       </select>
                     </div>
                     <div>
-                      <p className="text-[10px] mb-1.5 font-semibold" style={{ color: G.dim }}>Agrupar por (opcional)</p>
-                      <select value={groupBy} onChange={e => setGroupBy(e.target.value)} style={selectSt}>
-                        <option value="">— Columna de enlace (auto) —</option>
-                        {leftCols.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                      <p className="mb-1.5 text-[10px] font-semibold" style={{ color: G.dim }}>Agrupar por (opcional)</p>
+                      <select value={groupBy} onChange={(event) => setGroupBy(event.target.value)} style={selectStyle}>
+                        <option value="">— Automática —</option>
+                        {leftCols.map((column) => <option key={column.name} value={column.name}>{column.name}</option>)}
                       </select>
                     </div>
                   </div>
@@ -428,131 +757,118 @@ export default function CrossWizard({ tables, onClose, onResult }) {
             </AnimatePresence>
           </Section>
 
-          {/* 6 · Qué hacer con el resultado */}
-          <Section num={joinMode === 'join_columns' ? '6' : '5'} title="¿Qué hacer con el resultado del cruce?">
+          <Section num="5" title="¿Qué hacer con el resultado?">
             <div className="grid grid-cols-1 gap-2">
               {[
-                { key: 'only_result', title: 'Solo mostrar resultado', desc: 'Mostrar en panel de resultados sin guardar cambios' },
-                { key: 'replace_main', title: 'Actualizar archivo principal', desc: 'Reemplazar el archivo seleccionado con el resultado del cruce' },
-                { key: 'new_tab', title: 'Agregar en pestaña nueva', desc: 'Crear una tabla nueva dentro del proyecto actual' },
-                { key: 'new_file', title: 'Crear archivo diferente', desc: 'Crear una tabla diferente para trabajar por separado' },
-              ].map(opt => {
-                const sel = postAction === opt.key
+                { key: 'only_result', title: 'Solo mostrar resultado', desc: 'Muestra el cruce sin alterar archivos existentes' },
+                { key: 'replace_main', title: 'Actualizar archivo principal', desc: 'Sobrescribe el archivo seleccionado con el resultado del cruce' },
+                { key: 'append_to_table', title: 'Agregar el cruce a un archivo', desc: 'Agrega el resultado del cruce al archivo que elijas' },
+              ].map((option) => {
+                const selected = option.key === postAction
                 return (
-                  <motion.button
-                    key={opt.key}
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.98 }}
-                    onClick={() => setPostAction(opt.key)}
-                    className="text-left px-3 py-2.5 rounded-lg text-xs transition-all"
-                    style={sel ? cardActive : cardIdle}
-                  >
-                    <div className="font-bold" style={{ color: sel ? G.dark : G.text }}>{opt.title}</div>
-                    <div style={{ color: G.dim }} className="mt-0.5">{opt.desc}</div>
+                  <motion.button key={option.key} whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} onClick={() => setPostAction(option.key)} className="rounded-lg px-3 py-2.5 text-left text-xs transition-all" style={selected ? cardActive : cardIdle}>
+                    <div className="font-bold" style={{ color: selected ? G.dark : G.text }}>{option.title}</div>
+                    <div className="mt-0.5" style={{ color: G.dim }}>{option.desc}</div>
                   </motion.button>
                 )
               })}
             </div>
-            {postAction === 'replace_main' && (
+
+            {(postAction === 'replace_main' || postAction === 'append_to_table') && (
               <div className="mt-3">
-                <p className="text-[10px] mb-1.5 font-semibold" style={{ color: G.dim }}>Archivo principal a actualizar</p>
-                <select value={targetTable} onChange={e => setTargetTable(e.target.value)} style={selectSt}>
+                <p className="mb-1.5 text-[10px] font-semibold" style={{ color: G.dim }}>
+                  {postAction === 'replace_main' ? 'Archivo principal a actualizar' : 'Archivo donde se agregará el cruce'}
+                </p>
+                <select value={targetTable} onChange={(event) => setTargetTable(event.target.value)} style={selectStyle}>
                   <option value="">— Selecciona archivo —</option>
-                  {tables.map(t => <option key={t.name} value={t.name}>{t.name}</option>)}
+                  {tables.map((table) => <option key={table.name} value={table.name}>{table.name}</option>)}
                 </select>
-              </div>
-            )}
-            {(postAction === 'new_tab' || postAction === 'new_file') && (
-              <div className="mt-3">
-                <p className="text-[10px] mb-1.5 font-semibold" style={{ color: G.dim }}>Nombre de la nueva tabla</p>
-                <input
-                  value={newTableName}
-                  onChange={e => setNewTableName(e.target.value)}
-                  placeholder="resultado_cruce"
-                  style={selectSt}
-                />
               </div>
             )}
           </Section>
 
-          {/* Advertencias */}
           <AnimatePresence>
-            {warnings.map((w, i) => (
-              <motion.div key={i}
-                initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                className="rounded-lg px-4 py-2.5 text-xs flex items-start gap-2"
-                style={{ background: '#FFF8E1', border: '1px solid #FFE082', color: '#F57F17' }}>
-                <span style={{ fontSize: '1.1rem', lineHeight: 1 }}>⚠️</span>
-                <span style={{ lineHeight: '1.5' }}>{w}</span>
+            {warnings.map((warning) => (
+              <motion.div key={warning} initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="rounded-lg px-4 py-3 text-xs" style={{ background: '#FFF8E1', border: '1px solid #FFE082', color: '#8A5D00' }}>
+                {warning}
               </motion.div>
             ))}
           </AnimatePresence>
 
-          {/* SQL Preview */}
           {sqlPreview && (
             <section>
-              <p className="text-[10px] font-bold uppercase tracking-widest mb-2" style={{ color: G.dim }}>SQL que se ejecutará</p>
-              <pre className="rounded-lg px-4 py-3 text-[10px] font-mono overflow-x-auto"
-                style={{ background: '#fff', color: G.text2, border: `1px solid ${G.border}`, lineHeight: '1.6' }}>
-                {sqlPreview}
-              </pre>
+              <button
+                onClick={() => setSqlOpen(v => !v)}
+                className="mb-2 flex items-center gap-2"
+                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+              >
+                <span style={{ transform: sqlOpen ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', fontSize: 10, color: G.dim }}>▶</span>
+                <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: G.dim }}>{sqlOpen ? 'Ocultar SQL' : 'Ver SQL que se ejecutará'}</span>
+              </button>
+              <AnimatePresence>
+                {sqlOpen && (
+                  <motion.pre
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    className="overflow-x-auto rounded-lg px-4 py-3 text-[10px]"
+                    style={{ background: '#fff', color: G.text2, border: `1px solid ${G.border}`, lineHeight: 1.6 }}
+                  >
+                    {sqlPreview}
+                  </motion.pre>
+                )}
+              </AnimatePresence>
             </section>
           )}
 
-          {/* Error */}
           <AnimatePresence>
             {error && (
-              <motion.div key="err"
-                initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                className="rounded-xl px-4 py-3 text-xs whitespace-pre-line"
-                style={{ background: '#FFF3F3', border: '1px solid #FFCDD2', color: '#C62828' }}>
-                ⚠️ {error}
+              <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="whitespace-pre-line rounded-xl px-4 py-3 text-xs" style={{ background: '#FFF3F3', border: '1px solid #FFCDD2', color: '#C62828' }}>
+                {error}
               </motion.div>
             )}
           </AnimatePresence>
 
-          {/* Nota */}
-          {canExecute && (
-            <div className="rounded-lg px-4 py-2.5 text-xs flex items-start gap-2"
-              style={{ background: G.light, border: `1px solid ${G.border}` }}>
-              <span style={{ color: G.primary, fontSize: '1rem', lineHeight: 1 }}>ℹ</span>
-              <span style={{ color: G.text2 }}>
-                Los resultados aparecerán en el área principal con un resumen detallado del cruce.
-                Además, con el paso 5 puedes decidir si el resultado solo se muestra, actualiza un archivo principal o crea una nueva tabla.
-              </span>
+          <section className="rounded-xl border p-3" style={{ borderColor: G.border, background: '#fff' }}>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-widest" style={{ color: G.dim }}>Simulación previa</div>
+                <div className="text-[11px]" style={{ color: G.text2 }}>Prueba visual antes de ejecutar el cruce completo.</div>
+              </div>
+              <button
+                onClick={runSimulation}
+                disabled={!canExecute || simState.running}
+                className="rounded-lg px-3 py-1.5 text-xs font-semibold"
+                style={{
+                  border: `1px solid ${G.border}`,
+                  background: !canExecute ? '#EEF4EE' : '#F7FBF7',
+                  color: !canExecute ? G.dim : G.dark,
+                  cursor: !canExecute || simState.running ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {simState.running ? 'Simulando...' : 'Simular cruce'}
+              </button>
             </div>
-          )}
+            <div className="mt-2 h-2 overflow-hidden rounded-full" style={{ background: '#E4EFE4' }}>
+              <motion.div
+                initial={{ width: 0 }}
+                animate={{ width: `${simState.running ? Math.min(95, (simState.step + 1) * 28) : (simState.step >= 3 ? 100 : 0)}%` }}
+                transition={{ type: 'spring', stiffness: 95, damping: 15 }}
+                style={{ height: '100%', background: 'linear-gradient(90deg, #66BB6A, #2E7D32)' }}
+              />
+            </div>
+            <div className="mt-2 text-[11px]" style={{ color: G.dim }}>
+              {simState.running
+                ? ['Preparando muestra...', 'Normalizando claves...', 'Estimando coincidencias...', 'Finalizando...'][Math.min(simState.step, 3)]
+                : simState.step >= 3
+                  ? 'Simulación lista. Ya puedes ejecutar el cruce inteligente.'
+                  : 'Ejecuta la simulación para visualizar el comportamiento del cruce.'}
+            </div>
+          </section>
 
-          {/* Botón ejecutar */}
-          <motion.button
-            whileHover={canExecute && !isRunning ? { scale: 1.015, boxShadow: '0 0 28px rgba(67,160,71,0.4)' } : {}}
-            whileTap={canExecute && !isRunning ? { scale: 0.985 } : {}}
-            onClick={handleExecute}
-            disabled={!canExecute || isRunning}
-            className="w-full py-3 rounded-xl text-sm font-bold tracking-wide transition-all"
-            style={{
-              background: canExecute && !isRunning
-                ? `linear-gradient(135deg, ${G.primary} 0%, ${G.dark} 100%)`
-                : '#D7E8D7',
-              color: canExecute ? 'white' : G.dim,
-              border: 'none',
-              cursor: canExecute && !isRunning ? 'pointer' : 'not-allowed',
-            }}>
-            {isRunning ? (
-              <span className="flex items-center justify-center gap-2">
-                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin inline-block" />
-                Ejecutando cruce…
-              </span>
-            ) : canExecute ? '⋈ Ejecutar cruce y ver resultados' : (
-              !leftTable || !rightTable ? 'Selecciona dos archivos distintos' :
-              !joinCol ? 'Elige la columna de enlace de A' :
-              !rightJoinCol ? 'Elige la columna de enlace de B' :
-              needsAggCol && !aggCol ? 'Elige la columna a calcular' :
-              'Selecciona archivos distintos'
-            )}
+          <motion.button whileHover={canExecute && !isRunning ? { scale: 1.01, boxShadow: '0 0 28px rgba(67,160,71,0.4)' } : {}} whileTap={canExecute && !isRunning ? { scale: 0.985 } : {}} onClick={handleExecute} disabled={!canExecute || isRunning} className="w-full rounded-xl py-3 text-sm font-bold tracking-wide transition-all" style={{ background: canExecute && !isRunning ? `linear-gradient(135deg, ${G.primary} 0%, ${G.dark} 100%)` : '#D7E8D7', color: canExecute ? '#fff' : G.dim, cursor: canExecute && !isRunning ? 'pointer' : 'not-allowed' }}>
+            {isRunning ? 'Ejecutando cruce...' : '✨ Ejecutar cruce inteligente'}
           </motion.button>
-
         </div>
       </motion.div>
     </motion.div>

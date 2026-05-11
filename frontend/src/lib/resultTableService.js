@@ -1,4 +1,4 @@
-import { registerCSVAsTable } from './duckdb'
+import { executeQuery, registerCSVAsTable } from './duckdb'
 import { saveTable } from './indexeddb'
 
 export function sanitizeTableName(name, fallback = 'tabla_generada') {
@@ -6,17 +6,37 @@ export function sanitizeTableName(name, fallback = 'tabla_generada') {
   return clean || fallback
 }
 
-export function rowsToCsv(columns, rows) {
-  const header = columns.join(',')
+function ensureUniqueColumns(columns = []) {
+  const used = new Map()
+  return columns.map((column, index) => {
+    const base = String(column || `columna_${index + 1}`).trim() || `columna_${index + 1}`
+    const seen = used.get(base) || 0
+    used.set(base, seen + 1)
+    return seen ? `${base}_${seen + 1}` : base
+  })
+}
+
+function escapeDelimitedValue(value, delimiter) {
+  if (value === null || value === undefined) return ''
+  const text = String(value)
+  const mustQuote = text.includes(delimiter) || text.includes('"') || text.includes('\n') || text.includes('\r')
+  return mustQuote ? `"${text.replace(/"/g, '""')}"` : text
+}
+
+export function rowsToDelimitedText(columns, rows, delimiter = ',') {
+  const safeColumns = ensureUniqueColumns(columns)
+  const header = safeColumns.map((column) => escapeDelimitedValue(column, delimiter)).join(delimiter)
   const dataRows = rows.map(row =>
-    columns.map(col => {
-      const v = row[col]
-      if (v === null || v === undefined) return ''
-      const s = String(v)
-      return s.includes(',') || s.includes('"') || s.includes('\n') ? '"' + s.replace(/"/g, '""') + '"' : s
-    }).join(',')
+    safeColumns.map((col, index) => {
+      const sourceKey = columns[index]
+      return escapeDelimitedValue(row[sourceKey], delimiter)
+    }).join(delimiter)
   )
   return [header, ...dataRows].join('\n')
+}
+
+export function rowsToCsv(columns, rows) {
+  return rowsToDelimitedText(columns, rows, ',')
 }
 
 export function csvToArrayBuffer(csv) {
@@ -39,6 +59,35 @@ export async function saveResultAsTable(tableName, result) {
     sizeBytes,
     createdAt: Date.now(),
   }
+}
+
+function alignRowsToColumns(columns, rows) {
+  return rows.map((row) => {
+    const next = {}
+    columns.forEach((column) => {
+      next[column] = row[column] ?? null
+    })
+    return next
+  })
+}
+
+export async function overwriteTableWithResult(tableName, result) {
+  return saveResultAsTable(tableName, result)
+}
+
+export async function appendResultToTable(tableName, result) {
+  const current = await executeQuery(`SELECT * FROM "${tableName}";`)
+  const mergedColumns = Array.from(new Set([...(current.columns || []), ...(result.columns || [])]))
+  const mergedRows = [
+    ...alignRowsToColumns(mergedColumns, current.rows || []),
+    ...alignRowsToColumns(mergedColumns, result.rows || []),
+  ]
+  return saveResultAsTable(tableName, {
+    columns: mergedColumns,
+    rows: mergedRows,
+    rowCount: mergedRows.length,
+    duration: result.duration || '0.000',
+  })
 }
 
 export function projectResult(result, selectedColumns) {

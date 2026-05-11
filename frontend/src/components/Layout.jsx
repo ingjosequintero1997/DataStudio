@@ -5,7 +5,7 @@ import { auth } from '../firebase'
 import { initDuckDB, executeQuery, dropTable, registerCSVAsTable, describeTable, reorderTableColumns } from '../lib/duckdb'
 import { loadTablesMeta, loadTableBuffer, deleteTable } from '../lib/indexeddb'
 import { parseCommand } from '../lib/nlp'
-import { saveResultAsTable } from '../lib/resultTableService'
+import { appendResultToTable, overwriteTableWithResult, rowsToDelimitedText } from '../lib/resultTableService'
 import { ToastContainer } from './Toast'
 import Toolbar from './Toolbar'
 import ObjectExplorer from './ObjectExplorer'
@@ -14,16 +14,19 @@ import ResultsTable from './ResultsTable'
 import FileUploader from './FileUploader'
 import RightSidebar from './RightSidebar'
 import CrossWizard from './CrossWizard'
+import ExportModal from './ExportModal'
 import KnowledgeBaseModal from '../modules/knowledgeBase/KnowledgeBaseModal'
+import DashboardStudio from '../modules/dashboard/DashboardStudio'
+import ChatEngine from './ChatEngine'
 
 const spring = { type: 'spring', stiffness: 300, damping: 30 }
 
 // ── Skeleton row ─────────────────────────────────────────────────────────────
 function SkeletonRow({ cols = 5 }) {
   return (
-    <div className="flex gap-3 px-4 py-2.5 border-b" style={{ borderColor: 'rgba(255,255,255,0.04)' }}>
+    <div className="flex gap-3 px-4 py-2.5 border-b" style={{ borderColor: '#E6EFE6' }}>
       {Array.from({ length: cols }).map((_, i) => (
-        <div key={i} className="h-3 rounded flex-1 animate-pulse" style={{ background: 'rgba(255,255,255,0.07)', maxWidth: i === 0 ? 80 : 140 }} />
+        <div key={i} className="h-3 rounded flex-1 animate-pulse" style={{ background: '#D4E8D4', maxWidth: i === 0 ? 80 : 140 }} />
       ))}
     </div>
   )
@@ -32,10 +35,9 @@ function SkeletonRow({ cols = 5 }) {
 function SkeletonTable() {
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
-      {/* header */}
-      <div className="flex gap-3 px-4 py-2.5 border-b" style={{ borderColor: 'rgba(255,255,255,0.06)', background: 'rgba(0,120,212,0.06)' }}>
+      <div className="flex gap-3 px-4 py-2.5 border-b" style={{ borderColor: '#C8DCC8', background: '#E8F5E9' }}>
         {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="h-3 rounded flex-1 animate-pulse" style={{ background: 'rgba(0,120,212,0.2)', maxWidth: i === 0 ? 80 : 140 }} />
+          <div key={i} className="h-3 rounded flex-1 animate-pulse" style={{ background: '#B2D6B2', maxWidth: i === 0 ? 80 : 140 }} />
         ))}
       </div>
       {Array.from({ length: 12 }).map((_, i) => <SkeletonRow key={i} />)}
@@ -43,8 +45,19 @@ function SkeletonTable() {
   )
 }
 
+const G = {
+  dark:    '#1B5E20',
+  primary: '#43A047',
+  light:   '#E8F5E9',
+  border:  '#C8DCC8',
+  text:    '#1B3318',
+  text2:   '#4A6B4A',
+  dim:     '#9EBB9E',
+}
+
 let _toastId = 0
 export default function Layout({ user }) {
+  const [mode, setMode] = useState('chat') // 'chat' | 'sql'
   const [tables, setTables] = useState([])
   const [queryResult, setQueryResult] = useState(null)
   const [queryError, setQueryError] = useState(null)
@@ -54,7 +67,7 @@ export default function Layout({ user }) {
   const [dbReady, setDbReady] = useState(false)
   const [showRightSidebar, setShowRightSidebar] = useState(false)
   const [injectedCommand, setInjectedCommand] = useState(null)
-  const [sidebarWidth, setSidebarWidth] = useState(260)
+  const [sidebarWidth, setSidebarWidth] = useState(240)
   const [rightSidebarWidth, setRightSidebarWidth] = useState(260)
   const [editorHeight, setEditorHeight] = useState(42)
   const [crossLeft, setCrossLeft] = useState(null)
@@ -66,6 +79,9 @@ export default function Layout({ user }) {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [showCrossWizard, setShowCrossWizard] = useState(false)
   const [showKnowledgeBase, setShowKnowledgeBase] = useState(false)
+  const [showExportModal, setShowExportModal] = useState(false)
+  const [showDashboardStudio, setShowDashboardStudio] = useState(false)
+  const [exportDefaultFormat, setExportDefaultFormat] = useState('csv')
   const [newQuerySignal, setNewQuerySignal] = useState(0)
   const [activeQueryTabId, setActiveQueryTabId] = useState(1)
   const [querySessions, setQuerySessions] = useState({})
@@ -104,25 +120,31 @@ export default function Layout({ user }) {
 
   useEffect(() => {
     async function init() {
-      setStatusMessage('Iniciando motor DuckDB-Wasm...')
-      await initDuckDB()
-      setDbReady(true)
-      const savedTables = await loadTablesMeta()
-      if (savedTables.length > 0) {
-        setStatusMessage('Restaurando tablas guardadas...')
-        const restored = []
-        for (const meta of savedTables) {
-          try {
-            const buffer = await loadTableBuffer(meta.name)
-            if (buffer) { await registerCSVAsTable(meta.name, buffer); restored.push(meta) }
-          } catch(e) {}
+      try {
+        setStatusMessage('Iniciando motor DuckDB-Wasm...')
+        await initDuckDB()
+        setDbReady(true)
+        const savedTables = await loadTablesMeta()
+        if (savedTables.length > 0) {
+          setStatusMessage('Restaurando tablas guardadas...')
+          const restored = []
+          for (const meta of savedTables) {
+            try {
+              const buffer = await loadTableBuffer(meta.name)
+              if (buffer) { await registerCSVAsTable(meta.name, buffer); restored.push(meta) }
+            } catch(e) {}
+          }
+          setTables(restored)
+          setStatusMessage(restored.length + ' tabla(s) restaurada(s). Listo.')
+          if (restored.length > 0) addToast(restored.length + ' tabla(s) cargadas desde sesión anterior', 'success', 'Datos restaurados')
+        } else {
+          setStatusMessage('Motor listo. Carga un archivo para comenzar.')
+          addToast('Motor DuckDB listo', 'success', 'Sistema iniciado')
         }
-        setTables(restored)
-        setStatusMessage(restored.length + ' tabla(s) restaurada(s). Listo.')
-        if (restored.length > 0) addToast(restored.length + ' tabla(s) cargadas desde sesión anterior', 'success', 'Datos restaurados')
-      } else {
-        setStatusMessage('Motor listo. Carga un archivo para comenzar.')
-        addToast('Motor DuckDB listo', 'success', 'Sistema iniciado')
+      } catch (e) {
+        setDbReady(false)
+        setStatusMessage('No se pudo iniciar el motor. Reintenta recargando la página.')
+        addToast((e?.message || 'Fallo al iniciar DuckDB').slice(0, 120), 'error', 'Inicialización')
       }
     }
     init()
@@ -178,49 +200,53 @@ export default function Layout({ user }) {
         return
       }
 
-      let targetName = ''
-      if (mode === 'replace_main') targetName = ctx.targetTable || ctx.leftTable
-      if (mode === 'new_tab') targetName = (ctx.newTableName || `${ctx.leftTable}_cruce_nuevo`).replace(/[^a-zA-Z0-9_]/g, '_')
-      if (mode === 'new_file') targetName = (ctx.newTableName || `archivo_cruce_${Date.now()}`).replace(/[^a-zA-Z0-9_]/g, '_')
+      const targetName = ctx.targetTable || ctx.leftTable
       if (!targetName) return
 
-      const meta = await saveResultAsTable(targetName, res)
+      let meta = null
+      if (mode === 'replace_main') {
+        meta = await overwriteTableWithResult(targetName, res)
+      } else if (mode === 'append_to_table') {
+        meta = await appendResultToTable(targetName, res)
+      }
+      if (!meta) return
+
       handleTableLoaded(meta)
       if (mode === 'replace_main') {
         setStatusMessage('Cruce aplicado al archivo principal: "' + targetName + '"')
         addToast(meta.rowCount.toLocaleString() + ' filas', 'success', 'Archivo principal actualizado')
-      } else if (mode === 'new_tab') {
-        setStatusMessage('Cruce agregado en nueva pestaña: "' + targetName + '"')
-        addToast(meta.rowCount.toLocaleString() + ' filas', 'success', 'Nueva pestaña creada')
-      } else {
-        setStatusMessage('Cruce guardado como archivo diferente: "' + targetName + '"')
-        addToast(meta.rowCount.toLocaleString() + ' filas', 'success', 'Archivo diferente creado')
+      } else if (mode === 'append_to_table') {
+        setStatusMessage('Cruce agregado al archivo: "' + targetName + '"')
+        addToast(meta.rowCount.toLocaleString() + ' filas totales', 'success', 'Cruce agregado al archivo')
       }
     } catch (e) {
       addToast((e.message || 'No se pudo aplicar el resultado del cruce').slice(0, 120), 'error', 'Cruce')
     }
   }, [handleTableLoaded, addToast])
 
-  const handleExportCSV = useCallback((resOverride) => {
+  const handleRequestExport = useCallback((format = 'csv') => {
+    const res = lastResult || queryResult
+    if (!res?.rows?.length) {
+      setStatusMessage('No hay resultados para exportar.')
+      return
+    }
+    setExportDefaultFormat(format)
+    setShowExportModal(true)
+  }, [queryResult, lastResult])
+
+  const handleExportCSV = useCallback((resOverride, options = {}) => {
     const res = resOverride || lastResult || queryResult
     if (!res?.rows?.length) { setStatusMessage('No hay resultados para exportar.'); return }
-    const header = res.columns.join(',')
-    const dataRows = res.rows.map(row =>
-      res.columns.map(col => {
-        const val = row[col]
-        if (val === null || val === undefined) return ''
-        const s = String(val)
-        return s.includes(',') || s.includes('"') || s.includes('\n') ? '"' + s.replace(/"/g, '""') + '"' : s
-      }).join(',')
-    )
-    const csv = [header, ...dataRows].join('\n')
+    const delimiter = options.delimiter || ','
+    const fileName = options.fileName || ('resultado_' + Date.now())
+    const csv = rowsToDelimitedText(res.columns, res.rows, delimiter)
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
-    const a = document.createElement('a'); a.href = url; a.download = 'resultado_' + Date.now() + '.csv'; a.click()
+    const a = document.createElement('a'); a.href = url; a.download = fileName + '.csv'; a.click()
     URL.revokeObjectURL(url)
     addToast(res.rowCount.toLocaleString() + ' filas exportadas', 'success', 'CSV generado')
   }, [queryResult, lastResult])
 
-  const handleExportExcel = useCallback((resOverride) => {
+  const handleExportExcel = useCallback((resOverride, options = {}) => {
     const res = resOverride || lastResult || queryResult
     if (!res?.rows?.length) { setStatusMessage('No hay resultados para exportar.'); return }
     import('xlsx').then(XLSX => {
@@ -231,10 +257,24 @@ export default function Layout({ user }) {
       }))
       const wb = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(wb, ws, 'Resultado')
-      XLSX.writeFile(wb, 'resultado_' + Date.now() + '.xlsx')
+      XLSX.writeFile(wb, (options.fileName || ('resultado_' + Date.now())) + '.xlsx')
       addToast(res.rowCount.toLocaleString() + ' filas exportadas', 'success', 'Excel generado')
     })
   }, [queryResult, lastResult])
+
+  const handleConfirmExport = useCallback(({ format, delimiter, fileName }) => {
+    const res = lastResult || queryResult
+    if (!res?.rows?.length) {
+      setShowExportModal(false)
+      return
+    }
+    if (format === 'xlsx') {
+      handleExportExcel(res, { fileName })
+    } else {
+      handleExportCSV(res, { delimiter, fileName })
+    }
+    setShowExportModal(false)
+  }, [queryResult, lastResult, handleExportCSV, handleExportExcel])
 
   const handleExecuteCommand = useCallback(async (input, tabId = activeQueryTabId) => {
     setIsExecuting(true)
@@ -242,7 +282,27 @@ export default function Layout({ user }) {
     setQueryResult(null)
     setSessionState(tabId, { result: null, error: null })
     setStatusMessage('Interpretando comando...')
-    const parsed = parseCommand(input, tables)
+    let parsed = null
+    try {
+      parsed = parseCommand(input, tables)
+    } catch (e) {
+      const fallbackTable = tables[0]?.name
+      if (!fallbackTable) {
+        const err = 'No pude interpretar la instrucción y no hay tablas cargadas.'
+        setQueryError(err)
+        setSessionState(tabId, { error: err, result: null, statusMessage: 'No se pudo interpretar el comando.' })
+        setIsExecuting(false)
+        setStatusMessage('No se pudo interpretar el comando.')
+        addToast(err, 'error', 'Comando no reconocido')
+        return
+      }
+      parsed = {
+        sql: `SELECT * FROM "${fallbackTable}" LIMIT 50;`,
+        action: 'query',
+        description: `Vista rápida de "${fallbackTable}"`,
+      }
+      addToast('Interpretación flexible aplicada para evitar fallo.', 'info', 'Asistente')
+    }
     if (parsed.error) {
       setQueryError(parsed.error)
       setSessionState(tabId, { error: parsed.error, result: null, statusMessage: 'No se pudo interpretar el comando.' })
@@ -251,7 +311,7 @@ export default function Layout({ user }) {
       addToast(parsed.error, 'error', 'Comando no reconocido')
       return
     }
-    if (parsed.action === 'export') { handleExportCSV(); setIsExecuting(false); return }
+    if (parsed.action === 'export') { handleRequestExport('csv'); setIsExecuting(false); return }
     if (parsed.action === 'help') {
       setQueryError('Comandos disponibles: cruzar, consolidar, filtrar, actualizar, reemplazar, vaciar columna, reordenar columnas, contar, mostrar, exportar.')
       setSessionState(tabId, { error: 'Comandos disponibles: cruzar, consolidar, filtrar, actualizar, reemplazar, vaciar columna, reordenar columnas, contar, mostrar, exportar.', result: null })
@@ -376,6 +436,7 @@ export default function Layout({ user }) {
         onConsolidate={handleConsolidate}
         onCleanColumns={handleCleanColumns}
         onOpenKnowledgeBase={() => setShowKnowledgeBase(true)}
+        onOpenDashboard={() => setShowDashboardStudio(true)}
         isExecuting={isExecuting}
         hasResults={!!(queryResult?.rows?.length)}
         dbReady={dbReady}
@@ -448,25 +509,74 @@ export default function Layout({ user }) {
 
         {/* ── CENTER ── */}
         <div ref={containerRef} className="flex flex-col flex-1 overflow-hidden min-w-0">
-          <div style={{ height: editorHeight + '%' }} className="flex flex-col overflow-visible">
-            <CommandBar onExecute={handleExecuteCommand} isExecuting={isExecuting}
-              injectedValue={injectedCommand} onClear={() => setInjectedCommand(null)}
-              tables={tables} newTabSignal={newQuerySignal}
-              onTabChange={setActiveQueryTabId} />
+
+          {/* Tabs de modo */}
+          <div style={{ display: 'flex', alignItems: 'center', background: '#fff', borderBottom: `2px solid ${G.primary}`, flexShrink: 0, padding: '0 16px', gap: 4 }}>
+            {[
+              { key: 'chat', label: '◈ Conversación', title: 'Habla con tus datos en lenguaje natural' },
+              { key: 'sql',  label: '⌨ SQL Directo',  title: 'Editor SQL con autocompletado' },
+            ].map(tab => (
+              <button
+                key={tab.key}
+                title={tab.title}
+                onClick={() => setMode(tab.key)}
+                style={{
+                  padding: '8px 16px',
+                  borderBottom: mode === tab.key ? `2px solid ${G.primary}` : '2px solid transparent',
+                  marginBottom: -2,
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  fontSize: '0.78rem', fontWeight: mode === tab.key ? 700 : 500,
+                  fontFamily: 'Inter,sans-serif',
+                  color: mode === tab.key ? G.dark : G.dim,
+                  transition: 'color 0.15s',
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
-          <div className="resize-handle-y shrink-0" onMouseDown={onMouseDownY} />
-          <div className="flex flex-col flex-1 overflow-hidden">
-            {isExecuting && !queryResult ? (
-              <SkeletonTable />
-            ) : (
-              <ResultsTable result={queryResult} error={queryError} isExecuting={isExecuting}
-                visibleColumns={visibleCols?.length ? visibleCols : undefined}
-                onExport={() => handleExportCSV()}
-                onExportExcel={() => handleExportExcel()}
-                onClear={handleClearResults}
+
+          {/* Modo conversación */}
+          {mode === 'chat' && (
+            <div className="flex flex-col flex-1 overflow-hidden">
+              <ChatEngine
+                tables={tables}
+                onExport={handleExportCSV}
+                onExportExcel={handleExportExcel}
+                addToast={addToast}
+                onOpenCrossWizard={() => {
+                  if (tables.length < 2) { addToast('Carga al menos 2 archivos para cruzar.', 'info'); return }
+                  setShowCrossWizard(true)
+                }}
+                onOpenDashboard={() => setShowDashboardStudio(true)}
               />
-            )}
-          </div>
+            </div>
+          )}
+
+          {/* Modo SQL directo */}
+          {mode === 'sql' && (
+            <>
+              <div style={{ height: editorHeight + '%' }} className="flex flex-col overflow-visible">
+                <CommandBar onExecute={handleExecuteCommand} isExecuting={isExecuting}
+                  injectedValue={injectedCommand} onClear={() => setInjectedCommand(null)}
+                  tables={tables} newTabSignal={newQuerySignal}
+                  onTabChange={setActiveQueryTabId} />
+              </div>
+              <div className="resize-handle-y shrink-0" onMouseDown={onMouseDownY} />
+              <div className="flex flex-col flex-1 overflow-hidden">
+                {isExecuting && !queryResult ? (
+                  <SkeletonTable />
+                ) : (
+                  <ResultsTable result={queryResult} error={queryError} isExecuting={isExecuting}
+                    visibleColumns={visibleCols?.length ? visibleCols : undefined}
+                    onExport={() => handleRequestExport('csv')}
+                    onExportExcel={() => handleRequestExport('xlsx')}
+                    onClear={handleClearResults}
+                  />
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         {/* ── RIGHT sidebar toggle ── */}
@@ -505,6 +615,11 @@ export default function Layout({ user }) {
           <CrossWizard
             tables={tables}
             onClose={() => setShowCrossWizard(false)}
+            onAskAssistant={(prompt) => {
+              setShowCrossWizard(false)
+              setMode('chat')
+              window.dispatchEvent(new CustomEvent('ds-chat-prompt', { detail: { prompt } }))
+            }}
             onResult={async (res) => {
               setQueryResult(res)
               setSessionState(activeQueryTabId, { result: res, error: null, statusMessage: 'Cruce ejecutado — ' + res.rowCount.toLocaleString() + ' fila(s)' })
@@ -527,6 +642,35 @@ export default function Layout({ user }) {
             onUseCommand={(cmd) => setInjectedCommand(cmd)}
             onRunCommand={(cmd) => handleExecuteCommand(cmd, activeQueryTabId)}
             tables={tables}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showExportModal && (
+          <ExportModal
+            open={showExportModal}
+            onClose={() => setShowExportModal(false)}
+            onConfirm={handleConfirmExport}
+            rowCount={(lastResult || queryResult)?.rowCount || 0}
+            defaultFormat={exportDefaultFormat}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showDashboardStudio && (
+          <DashboardStudio
+            open={showDashboardStudio}
+            onClose={() => setShowDashboardStudio(false)}
+            tables={tables}
+            result={queryResult || lastResult}
+            addToast={addToast}
+            onAskAssistant={(prompt) => {
+              setShowDashboardStudio(false)
+              setMode('chat')
+              window.dispatchEvent(new CustomEvent('ds-chat-prompt', { detail: { prompt } }))
+            }}
           />
         )}
       </AnimatePresence>

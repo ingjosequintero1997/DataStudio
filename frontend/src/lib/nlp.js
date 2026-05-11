@@ -67,10 +67,61 @@ function isNumericType(type) {
   return ["INTEGER","BIGINT","DOUBLE","FLOAT","DECIMAL","NUMERIC","HUGEINT","UBIGINT","SMALLINT","TINYINT"].includes((type||"").toUpperCase())
 }
 
+const BASIC_STOPWORDS = new Set([
+  'de','del','la','el','los','las','un','una','y','o','a','en','por','para','con','sin',
+  'que','como','cual','cuales','donde','cuando','quiero','necesito','puedes','podrias','me',
+  'ver','mostrar','muestra','dame','trae','consulta','datos','tabla','archivo','registros','filas'
+])
+
+function extractQuotedValue(raw) {
+  const m = raw.match(/["']([^"']{1,120})["']/)
+  return m ? m[1].trim() : null
+}
+
+function extractLooseValue(raw, norm) {
+  const q = extractQuotedValue(raw)
+  if (q) return q
+  const n = raw.match(/\b\d[\d\-.]*\b/)
+  if (n) return n[0]
+  const words = norm
+    .split(/[^a-z0-9_]+/)
+    .map(w => w.trim())
+    .filter(Boolean)
+    .filter(w => w.length > 2 && !BASIC_STOPWORDS.has(w))
+  return words[words.length - 1] || null
+}
+
+function inferImplicitFilter(raw, norm, table) {
+  const cols = table?.columns || []
+  if (!cols.length) return null
+  const mentionedCol = cols.find(c => norm.includes(normalize(c.name)))
+  if (!mentionedCol) return null
+  const value = extractLooseValue(raw, norm)
+  if (!value) return null
+  const colInfo = cols.find(c => c.name === mentionedCol.name)
+  const numeric = isNumericType(colInfo?.type)
+  const cond = numeric && !isNaN(Number(value))
+    ? `"${mentionedCol.name}" = ${value}`
+    : `CAST("${mentionedCol.name}" AS VARCHAR) ILIKE '%${String(value).replace(/'/g,"''")}%'`
+  return {
+    sql: `SELECT *\nFROM "${table.name}"\nWHERE ${cond}\nLIMIT 200;`,
+    action: 'query',
+    description: `Filtro inferido en "${mentionedCol.name}" de "${table.name}"`,
+  }
+}
+
 function buildJoinProjection(leftTable, rightTable, leftCols, rightCols, leftJoinCol, rightJoinCol) {
   const leftProjection = (leftCols || []).map(col => `a."${col.name}" AS "${leftTable}.${col.name}"`)
   const rightProjection = (rightCols || []).map(col => `b."${col.name}" AS "${rightTable}.${col.name}"`)
   const statusProjection = `CASE WHEN a."${leftJoinCol}" IS NOT NULL AND b."${rightJoinCol}" IS NOT NULL THEN 'coincide' ELSE 'sin_coincidencia' END AS "estado_cruce"`
+  return [statusProjection, ...leftProjection, ...rightProjection].join(',\n       ')
+}
+
+function buildJoinProjectionFromPairs(leftTable, rightTable, leftCols, rightCols, pairs) {
+  const leftProjection = (leftCols || []).map(col => `a."${col.name}" AS "${leftTable}.${col.name}"`)
+  const rightProjection = (rightCols || []).map(col => `b."${col.name}" AS "${rightTable}.${col.name}"`)
+  const checks = pairs.map(({ left, right }) => `a."${left}" IS NOT NULL AND b."${right}" IS NOT NULL`).join(' AND ')
+  const statusProjection = `CASE WHEN ${checks} THEN 'coincide' ELSE 'sin_coincidencia' END AS "estado_cruce"`
   return [statusProjection, ...leftProjection, ...rightProjection].join(',\n       ')
 }
 
@@ -100,18 +151,24 @@ export function parseCommand(input, tables) {
     const cols1 = tables.find(t=>t.name===t1)?.columns||[]
     const cols2 = tables.find(t=>t.name===t2)?.columns||[]
     
-    // Detectar si es CROSS JOIN
-    if (/(cruzar todo|cruzar.*todo|producto cartesiano|cross)/.test(norm)) {
-      const totalRows = (tables.find(t=>t.name===t1)?.rowCount || 0) * (tables.find(t=>t.name===t2)?.rowCount || 0)
-      let warning = ''
-      if (totalRows > MAX_JOIN_ROWS) {
-        warning = `⚠️ CROSS JOIN generaría ~${Math.min(totalRows, MAX_JOIN_ROWS).toLocaleString()} filas (limitado a ${MAX_JOIN_ROWS.toLocaleString()})`
+    if (/(cruzar todo|cruzar.*todo|todo el archivo|toda la tabla)/.test(norm)) {
+      const pairs = cols1
+        .map(col => {
+          const right = cols2.find(c2 => normalize(c2.name) === normalize(col.name))
+          return right ? { left: col.name, right: right.name } : null
+        })
+        .filter(Boolean)
+      if (!pairs.length) {
+        return { error: `No hay columnas comunes entre "${t1}" y "${t2}" para cruzar todo el archivo.` }
       }
-      const leftProjection = (cols1 || []).map((col) => `a."${col.name}" AS "${t1}.${col.name}"`)
-      const rightProjection = (cols2 || []).map((col) => `b."${col.name}" AS "${t2}.${col.name}"`)
-      const projection = [...leftProjection, ...rightProjection].join(',\n       ')
-      const sql = `SELECT ${projection}\nFROM "${t1}" a\nCROSS JOIN "${t2}" b\nLIMIT ${MAX_JOIN_ROWS};`
-      return { sql, action:"query", description:`CROSS JOIN de "${t1}" y "${t2}"`, warning }
+      let joinType = 'LEFT JOIN'
+      if (/(inner|solo.*coincide|solo.*comun|interseccion|interior)/.test(norm)) joinType = 'INNER JOIN'
+      else if (/(full|completo|outer|todos.*ambos)/.test(norm)) joinType = 'FULL OUTER JOIN'
+      else if (/(right|derecha)/.test(norm)) joinType = 'RIGHT JOIN'
+      const condition = pairs.map(({ left, right }) => `TRIM(CAST(a."${left}" AS VARCHAR)) = TRIM(CAST(b."${right}" AS VARCHAR))`).join('\n  AND ')
+      const projection = buildJoinProjectionFromPairs(t1, t2, cols1, cols2, pairs)
+      const sql = `SELECT ${projection}\nFROM "${t1}" a\n${joinType} "${t2}" b\n  ON ${condition}\nLIMIT ${MAX_JOIN_ROWS};`
+      return { sql, action:"query", description:`${joinType} de "${t1}" y "${t2}" por todas las columnas comunes` }
     }
     
     // JOIN normal con columnas
@@ -533,6 +590,38 @@ export function parseCommand(input, tables) {
   const matchedTable = tables.find(t => norm.includes(normalize(t.name)))
   if (matchedTable) {
     return { sql:`SELECT *\nFROM "${matchedTable.name}"\nLIMIT ${MAX_ROWS};`, action:"query", description:`Mostrando "${matchedTable.name}"` }
+  }
+
+  // ── Ultra fallback: lenguaje básico / ambiguo ─────────────────────────────
+  const primary = tables[0]
+  if (primary) {
+    if (/(que\s+hay|que\s+tengo|muestrame\s+algo|ver\s+algo|empecemos|comienza|arranca|listo\??|ok\b)/.test(norm)) {
+      return {
+        sql: `SELECT *\nFROM "${primary.name}"\nLIMIT 50;`,
+        action: 'query',
+        description: `Vista rápida de "${primary.name}"`,
+      }
+    }
+
+    if (/(analiza|analizar|explica|resumen|diagnostico|diagnostico rapido|hallazgos|insight|problema|problemas|que\s+esta\s+mal|falla|errores)/.test(norm)) {
+      return {
+        sql: `SUMMARIZE "${primary.name}";`,
+        action: 'query',
+        description: `Resumen automático de "${primary.name}"`,
+      }
+    }
+
+    const inferredFilter = inferImplicitFilter(raw, norm, getBestTable(norm, tables))
+    if (inferredFilter) return inferredFilter
+
+    // Mensajes super cortos: priorizar ayudar, no bloquear
+    if (norm.split(/\s+/).filter(Boolean).length <= 3) {
+      return {
+        sql: `SELECT *\nFROM "${primary.name}"\nLIMIT 30;`,
+        action: 'query',
+        description: `Vista inicial de "${primary.name}"`,
+      }
+    }
   }
 
   return { error:`No entendí. Tablas: ${tables.map(t=>`"${t.name}"`).join(", ")}.\nEjemplos:\n• "Muestra todos los datos de ${tables[0]?.name}"\n• "Actualiza ${tables[0]?.name} pon [columna] a [valor] donde [col2] sea [val2]"\n• "Elimina registros de ${tables[0]?.name} donde [columna] sea [valor]"\n• "Agrega columna nueva_col de tipo INTEGER a ${tables[0]?.name}"` }
