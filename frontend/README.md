@@ -1,6 +1,6 @@
-# CSV SQL Studio
+# DataStudio AI OS
 
-Motor SQL en el navegador estilo SSMS. Procesa archivos CSV pesados (500k+ filas) con DuckDB-Wasm, sin servidor.
+Plataforma AI-native local-first para analitica avanzada. Procesa CSV/Excel con DuckDB-Wasm y usa una capa de orquestacion IA para consultas, reparacion SQL e insights.
 
 ## Stack
 
@@ -10,6 +10,8 @@ Motor SQL en el navegador estilo SSMS. Procesa archivos CSV pesados (500k+ filas
 - **PapaParse** — Lectura de CSV en chunks
 - **IndexedDB** (`idb`) — Persistencia local de tablas
 - **Firebase Auth** — Autenticación email/password
+- **Zustand** — Estado global modular
+- **AI Orchestrator Client** — Routing de tareas IA (orchestrator-first)
 
 ## Configuración inicial
 
@@ -31,6 +33,17 @@ cp .env.example .env
 ```
 
 4. Rellena las variables con los valores de tu proyecto Firebase.
+
+5. Configura runtime IA en `.env`:
+
+```bash
+VITE_AI_ORCHESTRATOR_URL=http://localhost:8787
+VITE_AI_ORCHESTRATOR_TOKEN=
+VITE_GROQ_API_KEY=
+```
+
+- `VITE_AI_ORCHESTRATOR_URL`: endpoint del backend de orquestacion (recomendado).
+- `VITE_GROQ_API_KEY`: fallback temporal si el orchestrator aun no esta desplegado.
 
 ### 3. Ejecutar en desarrollo
 
@@ -63,6 +76,16 @@ Directorio de salida: `dist`.
 3. **Escribir SQL** — El editor soporta autocompletado de tablas/columnas.
 4. **Ejecutar** — `F5` o `Ctrl+Enter` o el botón "Ejecutar".
 5. **Exportar** — El botón "Exportar CSV" descarga el resultado actual.
+
+## Arquitectura IA (base)
+
+- Entrada unica desde frontend: `src/services/ai/aiOrchestratorClient.js`
+- Modo preferido: Orchestrator API (`POST /v1/ai/run`)
+- Fallback temporal: Groq directo
+- Store global enterprise: `src/state/useDataStudioStore.js`
+- Tokens de diseno: `src/config/designSystem.js`
+
+Roadmap detallado: `docs/AI_OS_FOUNDATION.md`
 
 ## Funcionalidades SQL soportadas
 

@@ -1,12 +1,12 @@
-/**
- * ChatEngine — Motor de conversación de datos
- * El usuario habla, la IA genera SQL, ejecuta y devuelve insight en lenguaje natural.
+﻿/**
+ * ChatEngine v3 — Conversacion con IA
+ * Groq genera SQL to DuckDB ejecuta localmente to insight en lenguaje natural
  */
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { parseCommand } from '../lib/nlp'
 import { executeQuery } from '../lib/duckdb'
-import { checkAgentHealth, queryAgent } from '../lib/agentApi'
+import { runAiTask, isAiRuntimeConfigured } from '../services/ai/aiOrchestratorClient'
+import { parseCommand } from '../lib/nlp'
 
 const G = {
   dark:    '#1B5E20',
@@ -18,21 +18,19 @@ const G = {
   dim:     '#9EBB9E',
 }
 
-// ─── Mini tabla embebida en mensajes ────────────────────────────────────────
 function MiniTable({ result }) {
   if (!result?.rows?.length) return null
   const { columns, rows } = result
   const display = rows.slice(0, 300)
-
   return (
     <div style={{ borderRadius: 10, border: `1px solid ${G.border}`, overflow: 'hidden', marginTop: 12 }}>
       <div style={{ display: 'flex', background: G.dark, overflowX: 'auto' }}>
-        <div style={{ width: 36, flexShrink: 0, padding: '6px 8px', color: 'rgba(255,255,255,0.4)', fontSize: '0.63rem', borderRight: '1px solid rgba(255,255,255,0.1)', fontFamily: 'Inter,sans-serif' }}>#</div>
+        <div style={{ width: 36, flexShrink: 0, padding: '6px 8px', color: 'rgba(255,255,255,0.4)', fontSize: '0.63rem', borderRight: '1px solid rgba(255,255,255,0.1)' }}>#</div>
         {columns.map(col => (
-          <div key={col} style={{ minWidth: 80, maxWidth: 220, padding: '6px 10px', color: 'white', fontSize: '0.68rem', fontWeight: 700, fontFamily: 'Inter,sans-serif', borderRight: '1px solid rgba(255,255,255,0.1)', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={col}>{col}</div>
+          <div key={col} title={col} style={{ minWidth: 80, maxWidth: 200, padding: '6px 10px', color: 'white', fontSize: '0.68rem', fontWeight: 700, borderRight: '1px solid rgba(255,255,255,0.1)', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'Inter,sans-serif' }}>{col}</div>
         ))}
       </div>
-      <div style={{ maxHeight: 260, overflowY: 'auto', overflowX: 'auto', scrollbarWidth: 'thin', scrollbarColor: `${G.primary} ${G.light}` }}>
+      <div style={{ maxHeight: 260, overflowY: 'auto', overflowX: 'auto', scrollbarWidth: 'thin' }}>
         {display.map((row, i) => (
           <div key={i} style={{ display: 'flex', background: i % 2 === 0 ? '#FAFCFA' : '#fff', borderBottom: `1px solid ${G.border}` }}>
             <div style={{ width: 36, flexShrink: 0, padding: '4px 8px', color: G.dim, fontSize: '0.61rem', textAlign: 'right', borderRight: `1px solid ${G.border}`, fontFamily: 'Inter,sans-serif' }}>{i + 1}</div>
@@ -42,18 +40,7 @@ function MiniTable({ result }) {
               const str = isNull ? '' : String(val)
               const isNum = !isNull && str.trim() !== '' && !isNaN(Number(str))
               return (
-                <div
-                  key={col}
-                  title={str}
-                  style={{
-                    minWidth: 80, maxWidth: 220, padding: '4px 10px',
-                    fontSize: '0.72rem', fontFamily: 'JetBrains Mono, monospace',
-                    borderRight: `1px solid ${G.border}`, flexShrink: 0,
-                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    color: isNull ? G.dim : isNum ? (Number(str) < 0 ? '#C62828' : '#1B5E20') : G.text,
-                    fontStyle: isNull ? 'italic' : 'normal',
-                  }}
-                >
+                <div key={col} title={str} style={{ minWidth: 80, maxWidth: 200, padding: '4px 10px', fontSize: '0.72rem', fontFamily: 'JetBrains Mono, monospace', borderRight: `1px solid ${G.border}`, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: isNull ? G.dim : isNum ? (Number(str) < 0 ? '#C62828' : '#1B5E20') : G.text, fontStyle: isNull ? 'italic' : 'normal' }}>
                   {isNull ? 'NULL' : str}
                 </div>
               )
@@ -61,21 +48,20 @@ function MiniTable({ result }) {
           </div>
         ))}
       </div>
-      <div style={{ padding: '5px 12px', background: G.light, borderTop: `1px solid ${G.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ padding: '5px 12px', background: G.light, borderTop: `1px solid ${G.border}`, display: 'flex', justifyContent: 'space-between' }}>
         <span style={{ fontSize: '0.67rem', color: G.text2, fontFamily: 'Inter,sans-serif' }}>
-          {rows.length > 300 ? `Mostrando 300 de ${rows.length.toLocaleString()} filas` : `${rows.length.toLocaleString()} fila(s)`} · {columns.length} col(s)
+          {rows.length > 300 ? `Mostrando 300 de ${rows.length.toLocaleString()}` : `${rows.length.toLocaleString()} fila(s)`} · {columns.length} col(s)
         </span>
       </div>
     </div>
   )
 }
 
-// ─── Briefing card con severidades ─────────────────────────────────────────
 const SEV = {
-  critical: { label: 'CRÍTICO',  bg: '#FFF3F3', border: '#FFCDD2', text: '#C62828', dot: '#EF5350' },
-  warning:  { label: 'ATENCIÓN', bg: '#FFFDE7', border: '#FFE082', text: '#E65100', dot: '#FFB300' },
-  insight:  { label: 'INSIGHT',  bg: '#E8F4FD', border: '#BBDEFB', text: '#0D47A1', dot: '#1976D2' },
-  ok:       { label: 'OK',       bg: '#E8F5E9', border: '#C8E6C9', text: '#1B5E20', dot: '#43A047' },
+  critical: { label: 'CRITICO', bg: '#FFF3F3', border: '#FFCDD2', text: '#C62828', dot: '#EF5350' },
+  warning:  { label: 'ATENCION', bg: '#FFFDE7', border: '#FFE082', text: '#E65100', dot: '#FFB300' },
+  insight:  { label: 'INSIGHT', bg: '#E8F4FD', border: '#BBDEFB', text: '#0D47A1', dot: '#1976D2' },
+  ok:       { label: 'OK', bg: '#E8F5E9', border: '#C8E6C9', text: '#1B5E20', dot: '#43A047' },
 }
 
 function BriefingCard({ briefing, onSuggest }) {
@@ -83,16 +69,13 @@ function BriefingCard({ briefing, onSuggest }) {
   if (!briefing?.items?.length) return null
   return (
     <div style={{ borderRadius: 12, border: `1.5px solid ${G.border}`, overflow: 'hidden', marginTop: 10 }}>
-      <button
-        onClick={() => setOpen(o => !o)}
-        style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 14px', background: `linear-gradient(135deg, ${G.dark}, #2E7D32)`, border: 'none', cursor: 'pointer' }}
-      >
+      <button onClick={() => setOpen(o => !o)} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 14px', background: `linear-gradient(135deg, ${G.dark}, #2E7D32)`, border: 'none', cursor: 'pointer' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 13, color: 'white' }}>◈</span>
-          <span style={{ fontSize: '0.68rem', fontWeight: 700, color: 'white', fontFamily: 'Inter,sans-serif', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Briefing — {briefing.tableName}</span>
+          <span style={{ fontSize: '0.68rem', fontWeight: 700, color: 'white', fontFamily: 'Inter,sans-serif', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Diagnostico — {briefing.tableName}</span>
           <span style={{ fontSize: '0.63rem', color: 'rgba(255,255,255,0.65)', fontFamily: 'Inter,sans-serif' }}>{briefing.rowCount?.toLocaleString()} filas · {briefing.colCount} cols</span>
         </div>
-        <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10, transform: open ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>▼</span>
+        <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10 }}>▼</span>
       </button>
       {open && (
         <div>
@@ -101,7 +84,7 @@ function BriefingCard({ briefing, onSuggest }) {
             return (
               <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 14px', background: cfg.bg, borderTop: `1px solid ${cfg.border}` }}>
                 <div style={{ width: 8, height: 8, borderRadius: '50%', background: cfg.dot, marginTop: 5, flexShrink: 0 }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ flex: 1 }}>
                   <span style={{ fontSize: '0.63rem', fontWeight: 700, color: cfg.text, fontFamily: 'Inter,sans-serif', textTransform: 'uppercase', letterSpacing: '0.06em', marginRight: 7 }}>{cfg.label}</span>
                   <span style={{ fontSize: '0.76rem', color: cfg.text, fontFamily: 'Inter,sans-serif', lineHeight: 1.5 }}>{item.text}</span>
                 </div>
@@ -110,12 +93,9 @@ function BriefingCard({ briefing, onSuggest }) {
           })}
           {briefing.suggestions?.length > 0 && (
             <div style={{ padding: '8px 14px', background: G.light, borderTop: `1px solid ${G.border}`, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-              <span style={{ fontSize: '0.62rem', color: G.dim, fontFamily: 'Inter,sans-serif', flexShrink: 0 }}>Preguntas sugeridas:</span>
+              <span style={{ fontSize: '0.62rem', color: G.dim, fontFamily: 'Inter,sans-serif', flexShrink: 0 }}>Sugerencias:</span>
               {briefing.suggestions.map((s, i) => (
-                <motion.button key={i} whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.96 }}
-                  onClick={() => onSuggest?.(s)}
-                  style={{ padding: '3px 10px', borderRadius: 20, border: `1px solid ${G.border}`, background: '#fff', color: G.text2, fontSize: '0.68rem', fontFamily: 'Inter,sans-serif', cursor: 'pointer', fontWeight: 500 }}
-                >{s}</motion.button>
+                <motion.button key={i} whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.96 }} onClick={() => onSuggest?.(s)} style={{ padding: '3px 10px', borderRadius: 20, border: `1px solid ${G.border}`, background: '#fff', color: G.text2, fontSize: '0.68rem', fontFamily: 'Inter,sans-serif', cursor: 'pointer', fontWeight: 500 }}>{s}</motion.button>
               ))}
             </div>
           )}
@@ -125,104 +105,82 @@ function BriefingCard({ briefing, onSuggest }) {
   )
 }
 
-// ─── Texto con **negrita** ───────────────────────────────────────────────────
 function RichText({ text }) {
   if (!text) return null
   const parts = text.split(/\*\*(.+?)\*\*/g)
   return (
     <span>
-      {parts.map((p, i) =>
-        i % 2 === 1
-          ? <strong key={i} style={{ color: G.dark, fontWeight: 700 }}>{p}</strong>
-          : p
-      )}
+      {parts.map((p, i) => i % 2 === 1 ? <strong key={i} style={{ color: G.dark, fontWeight: 700 }}>{p}</strong> : p)}
     </span>
   )
 }
 
-// ─── Burbuja del asistente ───────────────────────────────────────────────────
+function SetupGuideCard() {
+  return (
+    <div style={{ borderRadius: 12, border: '1.5px solid #BBDEFB', background: '#E8F4FD', overflow: 'hidden', marginTop: 4 }}>
+      <div style={{ padding: '10px 14px', background: 'linear-gradient(135deg, #0D47A1, #1565C0)', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 16 }}>⚡</span>
+        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'white', fontFamily: 'Inter,sans-serif', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Activa runtime IA en 2 minutos</span>
+      </div>
+      <div style={{ padding: '12px 14px' }}>
+        <p style={{ margin: '0 0 10px', fontSize: '0.8rem', color: '#0D47A1', fontFamily: 'Inter,sans-serif', lineHeight: 1.6 }}>
+          Configura primero el Orchestrator IA y si aun no esta listo usa Groq como fallback:
+        </p>
+        <ol style={{ margin: 0, paddingLeft: 20, fontSize: '0.78rem', color: '#1B3318', fontFamily: 'Inter,sans-serif', lineHeight: 2 }}>
+          <li>Configura <strong>VITE_AI_ORCHESTRATOR_URL</strong> hacia tu API local o backend</li>
+          <li>Opcional: agrega <strong>VITE_AI_ORCHESTRATOR_TOKEN</strong> para proteger la API</li>
+          <li>Fallback temporal: crea API key en <strong>console.groq.com</strong> y agrega <code style={{ background: '#fff', border: '1px solid #BBDEFB', borderRadius: 4, padding: '2px 6px', fontSize: '0.75rem', color: '#0D47A1' }}>VITE_GROQ_API_KEY</code></li>
+          <li>Redeploy desde Vercel para aplicar variables</li>
+        </ol>
+        <p style={{ margin: '10px 0 0', fontSize: '0.72rem', color: '#4A6B4A', fontFamily: 'Inter,sans-serif' }}>
+          Si no hay runtime IA configurado, se activa modo local basico.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 function AssistantMessage({ msg, onExport, onExportExcel, onSuggest }) {
   const [sqlOpen, setSqlOpen] = useState(false)
-
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ type: 'spring', stiffness: 340, damping: 28 }}
-      style={{ display: 'flex', gap: 10, alignItems: 'flex-start', maxWidth: '88%' }}
-    >
-      {/* Avatar */}
-      <div style={{ width: 32, height: 32, borderRadius: 10, background: `linear-gradient(135deg, ${G.primary}, ${G.dark})`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2, fontSize: 15 }}>
-        ◈
-      </div>
-
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ type: 'spring', stiffness: 340, damping: 28 }} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', maxWidth: '90%' }}>
+      <div style={{ width: 32, height: 32, borderRadius: 10, background: `linear-gradient(135deg, ${G.primary}, ${G.dark})`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2, fontSize: 15 }}>◈</div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ background: '#fff', borderRadius: '4px 14px 14px 14px', padding: '12px 16px', border: `1px solid ${G.border}`, boxShadow: '0 2px 10px rgba(0,0,0,0.07)' }}>
-
-          {/* Texto insight */}
+          {msg.isSetupGuide && <SetupGuideCard />}
           {msg.text && (
-            <p style={{ margin: 0, fontSize: '0.86rem', color: G.text, fontFamily: 'Inter,sans-serif', lineHeight: 1.65, marginBottom: (msg.sql || msg.result || msg.error) ? 10 : 0 }}>
+            <p style={{ margin: 0, fontSize: '0.86rem', color: G.text, fontFamily: 'Inter,sans-serif', lineHeight: 1.7, whiteSpace: 'pre-wrap', marginBottom: (msg.sql || msg.result || msg.error || msg.briefing) ? 10 : 0 }}>
               <RichText text={msg.text} />
             </p>
           )}
-
-          {/* Error */}
           {msg.error && (
             <div style={{ background: '#FFF3F3', border: '1px solid #FFCDD2', borderRadius: 8, padding: '9px 13px', marginTop: msg.text ? 8 : 0 }}>
               <p style={{ margin: 0, fontSize: '0.8rem', color: '#C62828', fontFamily: 'Inter,sans-serif', lineHeight: 1.55 }}>{msg.error}</p>
             </div>
           )}
-
-          {/* SQL colapsable */}
           {msg.sql && (
             <div style={{ marginTop: 8 }}>
-              <button
-                onClick={() => setSqlOpen(o => !o)}
-                style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', color: G.dim, fontSize: '0.71rem', fontFamily: 'Inter,sans-serif', padding: 0 }}
-              >
-                <span style={{ display: 'inline-block', transform: sqlOpen ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.18s', fontSize: 9 }}>▶</span>
-                {sqlOpen ? 'Ocultar SQL' : 'Ver SQL generado'}
+              <button onClick={() => setSqlOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', color: G.dim, fontSize: '0.71rem', fontFamily: 'Inter,sans-serif', padding: 0 }}>
+                <span style={{ display: 'inline-block', transform: sqlOpen ? 'rotate(90deg)' : 'none', transition: 'transform 0.18s', fontSize: 9 }}>▶</span>
+                {sqlOpen ? 'Ocultar SQL' : 'Ver SQL generado por IA'}
               </button>
               <AnimatePresence>
                 {sqlOpen && (
-                  <motion.pre
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: 'auto', opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    style={{ margin: '6px 0 0', background: '#F4F7F4', border: `1px solid ${G.border}`, borderRadius: 8, padding: '8px 12px', fontSize: '0.71rem', color: G.text2, fontFamily: 'JetBrains Mono, monospace', overflowX: 'auto', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}
-                  >
+                  <motion.pre initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} style={{ margin: '6px 0 0', background: '#F4F7F4', border: `1px solid ${G.border}`, borderRadius: 8, padding: '8px 12px', fontSize: '0.71rem', color: G.text2, fontFamily: 'JetBrains Mono, monospace', overflowX: 'auto', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
                     {msg.sql}
                   </motion.pre>
                 )}
               </AnimatePresence>
             </div>
           )}
-
-          {/* Briefing ejecutivo */}
-          {msg.briefing && (
-            <BriefingCard briefing={msg.briefing} onSuggest={onSuggest} />
-          )}
-
-          {/* Tabla inline */}
+          {msg.briefing && <BriefingCard briefing={msg.briefing} onSuggest={onSuggest} />}
           {msg.result?.rows?.length > 0 && (
             <>
               <MiniTable result={msg.result} />
               <div style={{ display: 'flex', gap: 7, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                <button
-                  onClick={() => onExport?.(msg.result)}
-                  style={{ padding: '4px 11px', borderRadius: 7, border: `1px solid ${G.border}`, background: '#fff', color: G.text2, fontSize: '0.7rem', fontFamily: 'Inter,sans-serif', cursor: 'pointer', fontWeight: 600 }}
-                >
-                  ⬇ CSV
-                </button>
-                <button
-                  onClick={() => onExportExcel?.(msg.result)}
-                  style={{ padding: '4px 11px', borderRadius: 7, border: `1px solid ${G.border}`, background: '#fff', color: G.text2, fontSize: '0.7rem', fontFamily: 'Inter,sans-serif', cursor: 'pointer', fontWeight: 600 }}
-                >
-                  ⬇ Excel
-                </button>
-                {msg.duration && (
-                  <span style={{ fontSize: '0.66rem', color: G.dim, fontFamily: 'Inter,sans-serif', marginLeft: 2 }}>⏱ {msg.duration}s</span>
-                )}
+                <button onClick={() => onExport?.(msg.result)} style={{ padding: '4px 11px', borderRadius: 7, border: `1px solid ${G.border}`, background: '#fff', color: G.text2, fontSize: '0.7rem', fontFamily: 'Inter,sans-serif', cursor: 'pointer', fontWeight: 600 }}>⬇ CSV</button>
+                <button onClick={() => onExportExcel?.(msg.result)} style={{ padding: '4px 11px', borderRadius: 7, border: `1px solid ${G.border}`, background: '#fff', color: G.text2, fontSize: '0.7rem', fontFamily: 'Inter,sans-serif', cursor: 'pointer', fontWeight: 600 }}>⬇ Excel</button>
+                {msg.duration && <span style={{ fontSize: '0.66rem', color: G.dim, fontFamily: 'Inter,sans-serif' }}>⏱ {msg.duration}s</span>}
               </div>
             </>
           )}
@@ -235,15 +193,9 @@ function AssistantMessage({ msg, onExport, onExportExcel, onSuggest }) {
   )
 }
 
-// ─── Burbuja del usuario ─────────────────────────────────────────────────────
 function UserMessage({ msg }) {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ type: 'spring', stiffness: 340, damping: 28 }}
-      style={{ display: 'flex', justifyContent: 'flex-end' }}
-    >
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ type: 'spring', stiffness: 340, damping: 28 }} style={{ display: 'flex', justifyContent: 'flex-end' }}>
       <div style={{ maxWidth: '78%' }}>
         <div style={{ background: `linear-gradient(135deg, ${G.primary}, ${G.dark})`, borderRadius: '14px 4px 14px 14px', padding: '10px 16px' }}>
           <p style={{ margin: 0, fontSize: '0.86rem', fontFamily: 'Inter,sans-serif', lineHeight: 1.55, color: 'white', whiteSpace: 'pre-wrap' }}>{msg.text}</p>
@@ -256,7 +208,6 @@ function UserMessage({ msg }) {
   )
 }
 
-// ─── Indicador "escribiendo" ─────────────────────────────────────────────────
 function TypingIndicator() {
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
@@ -264,12 +215,7 @@ function TypingIndicator() {
       <div style={{ background: '#fff', borderRadius: '4px 14px 14px 14px', padding: '14px 18px', border: `1px solid ${G.border}`, boxShadow: '0 2px 10px rgba(0,0,0,0.07)' }}>
         <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
           {[0, 1, 2].map(i => (
-            <motion.div
-              key={i}
-              style={{ width: 7, height: 7, borderRadius: '50%', background: G.primary }}
-              animate={{ y: [0, -7, 0] }}
-              transition={{ duration: 0.55, delay: i * 0.14, repeat: Infinity }}
-            />
+            <motion.div key={i} style={{ width: 7, height: 7, borderRadius: '50%', background: G.primary }} animate={{ y: [0, -7, 0] }} transition={{ duration: 0.55, delay: i * 0.14, repeat: Infinity }} />
           ))}
         </div>
       </div>
@@ -277,113 +223,108 @@ function TypingIndicator() {
   )
 }
 
-// ─── Generador de insights en lenguaje natural ────────────────────────────────
-function buildInsight(sql = '', result, description = '', context = {}) {
-  if (!result) return null
-  const { rows, columns, rowCount } = result
-
-  if (rowCount === 0) {
-    const hint = context.focusCol ? ` La columna **"${context.focusCol}"** puede tener valores vacíos o formatos distintos.` : ''
-    return `⚠️ La consulta no devolvió resultados. Verifica los filtros o los nombres de los archivos cargados.${hint}`
-  }
-
-  // JOIN / cruce
-  if (/\bjoin\b/i.test(sql)) {
-    const matched = rows.filter(r => r['Coincide'] === 'SI' || r['estado_cruce'] === 'coincide').length
-    const noMatch = rows.filter(r => r['Coincide'] === 'NO' || r['estado_cruce'] === 'sin_coincidencia').length
-    const pct = rowCount > 0 ? Math.round((matched / rowCount) * 100) : 0
-    const badge = pct >= 90 ? '✅ Excelente.' : pct >= 60 ? '🟡 Coincidencia parcial.' : '⚠️ Baja coincidencia — verifica las columnas de enlace.'
-    const contextHint = context.queriesCount > 3 && pct < 60 ? ' Basado en tu análisis previo, revisa si los IDs tienen espacios o formatos distintos.' : ''
-    return `Se procesaron **${rowCount.toLocaleString()}** filas. **${matched.toLocaleString()} coinciden** (${pct}%) y **${noMatch.toLocaleString()} no tienen par**. ${badge}${contextHint}`
-  }
-
-  // Escalar único
-  if (rowCount === 1 && columns.length === 1) {
-    const val = rows[0][columns[0]]
-    const num = Number(val)
-    const display = !isNaN(num) && val !== '' ? num.toLocaleString() : val
-    const ctxHint = context.queriesCount >= 3 ? ` (pregunta ${context.queriesCount} en esta sesión)` : ''
-    return `**${columns[0]}**: **${display}**${ctxHint}`
-  }
-
-  // Agrupación con 2 columnas (GROUP BY / ranking)
-  if (rowCount <= 20 && columns.length === 2) {
-    const numCol = columns.find(c => rows.slice(0, 5).every(r => r[c] !== null && !isNaN(Number(r[c])) && String(r[c]).trim() !== ''))
-    const labelCol = columns.find(c => c !== numCol)
-    if (numCol && labelCol) {
-      const topRow = rows[0]
-      const topLabel = topRow[labelCol]
-      const topNum = Number(topRow[numCol])
-      const total = rows.reduce((s, r) => s + (Number(r[numCol]) || 0), 0)
-      const pct = total > 0 ? Math.round((topNum / total) * 100) : 0
-      const prevFocus = context.recentTopics?.length > 1 ? ` Recuerda que también preguntaste sobre ${context.recentTopics.slice(-2, -1)[0]?.split(' ').slice(0,3).join(' ')}.` : ''
-      return `**${rowCount}** grupos encontrados. El mayor es **"${topLabel}"** con **${topNum.toLocaleString()}** (${pct}% del total).${prevFocus}`
-    }
-  }
-
-  // Resultado grande
-  if (rowCount > 10000) {
-    return `Encontré **${rowCount.toLocaleString()}** registros con **${columns.length}** columnas. Conjunto grande — puedes filtrar para profundizar.`
-  }
-
-  return `Encontré **${rowCount.toLocaleString()}** registro(s) con **${columns.length}** columna(s).`
+function ActionBar({ tables, onOpenCrossWizard, onOpenDashboard, onOpenKnowledgeBase, onConsolidate, isThinking }) {
+  if (!tables.length) return null
+  const totalRows = tables.reduce((s, t) => s + (t.rowCount || 0), 0)
+  return (
+    <div style={{ padding: '8px 16px', background: '#fff', borderBottom: `1px solid ${G.border}`, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 20, background: G.light, border: `1px solid ${G.border}`, marginRight: 4 }}>
+        <span style={{ fontSize: 11 }}>📁</span>
+        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: G.dark, fontFamily: 'Inter,sans-serif' }}>
+          {tables.length} archivo{tables.length !== 1 ? 's' : ''} · {totalRows.toLocaleString()} filas
+        </span>
+      </div>
+      {tables.length >= 2 && (
+        <motion.button whileHover={{ scale: 1.04, y: -1 }} whileTap={{ scale: 0.95 }} onClick={onOpenCrossWizard} disabled={isThinking}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 13px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg, #0078d4, #0056b3)', color: 'white', fontSize: '0.72rem', fontWeight: 700, fontFamily: 'Inter,sans-serif', cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,120,212,0.3)', opacity: isThinking ? 0.5 : 1 }}>
+          ⋈ Cruzar
+        </motion.button>
+      )}
+      {tables.length >= 2 && (
+        <motion.button whileHover={{ scale: 1.04, y: -1 }} whileTap={{ scale: 0.95 }} onClick={onConsolidate} disabled={isThinking}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 13px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg, #4f46e5, #3730a3)', color: 'white', fontSize: '0.72rem', fontWeight: 700, fontFamily: 'Inter,sans-serif', cursor: 'pointer', boxShadow: '0 2px 8px rgba(79,70,229,0.3)', opacity: isThinking ? 0.5 : 1 }}>
+          ≡ Consolidar
+        </motion.button>
+      )}
+      <motion.button whileHover={{ scale: 1.04, y: -1 }} whileTap={{ scale: 0.95 }} onClick={onOpenDashboard} disabled={isThinking}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 13px', borderRadius: 8, border: 'none', background: `linear-gradient(135deg, ${G.dark}, #145A32)`, color: 'white', fontSize: '0.72rem', fontWeight: 700, fontFamily: 'Inter,sans-serif', cursor: 'pointer', boxShadow: '0 2px 8px rgba(27,94,32,0.3)', opacity: isThinking ? 0.5 : 1 }}>
+        📊 Dashboard
+      </motion.button>
+      <motion.button whileHover={{ scale: 1.04, y: -1 }} whileTap={{ scale: 0.95 }} onClick={onOpenKnowledgeBase} disabled={isThinking}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 13px', borderRadius: 8, border: `1px solid ${G.border}`, background: '#fff', color: G.dark, fontSize: '0.72rem', fontWeight: 700, fontFamily: 'Inter,sans-serif', cursor: 'pointer', opacity: isThinking ? 0.5 : 1 }}>
+        📚 Conocimiento
+      </motion.button>
+    </div>
+  )
 }
 
-// ─── Sugerencias automáticas según los archivos cargados ─────────────────────
-function buildSuggestions(tables) {
-  if (!tables.length) return []
-  const t0 = tables[0]
-  const cols = t0.columns || []
-  const numCols = cols.filter(c => ['INTEGER','BIGINT','DOUBLE','FLOAT','DECIMAL','NUMERIC'].some(tp => (c.type || '').toUpperCase().includes(tp)))
-  const base = [
-    `Muestra los primeros 20 registros de ${t0.name}`,
-    `¿Cuántos registros tiene ${t0.name}?`,
-    `Busca duplicados en ${t0.name}`,
-    `¿Cuántos valores nulos hay en ${t0.name}?`,
-    `Estadísticas de ${t0.name}`,
-  ]
-  if (numCols.length > 0) base.push(`Máximo de ${numCols[0].name} en ${t0.name}`)
-  if (tables.length >= 2) {
-    base.push(`Cruza ${tables[0].name} con ${tables[1].name}`)
-    base.push(`Consolida ${tables[0].name} con ${tables[1].name}`)
-  }
-  return base.slice(0, 6)
+function EmptyState({ onOpenUploader }) {
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px 24px', gap: 24 }}>
+      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: 'spring', stiffness: 300, damping: 25 }} style={{ width: 80, height: 80, borderRadius: 24, background: `linear-gradient(135deg, ${G.primary}, ${G.dark})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 36, boxShadow: '0 8px 32px rgba(67,160,71,0.35)' }}>
+        ◈
+      </motion.div>
+      <div style={{ textAlign: 'center', maxWidth: 380 }}>
+        <h2 style={{ margin: '0 0 8px', fontSize: '1.25rem', fontWeight: 800, color: G.dark, fontFamily: 'Inter,sans-serif' }}>DataStudio AI</h2>
+        <p style={{ margin: '0 0 20px', fontSize: '0.88rem', color: G.text2, fontFamily: 'Inter,sans-serif', lineHeight: 1.7 }}>
+          Carga cualquier archivo CSV o Excel y conversa con tus datos en lenguaje natural. La IA genera SQL automaticamente.
+        </p>
+        <motion.button whileHover={{ scale: 1.04, y: -2 }} whileTap={{ scale: 0.95 }} onClick={onOpenUploader}
+          style={{ padding: '10px 24px', borderRadius: 12, border: 'none', background: `linear-gradient(135deg, ${G.primary}, ${G.dark})`, color: 'white', fontSize: '0.88rem', fontWeight: 700, fontFamily: 'Inter,sans-serif', cursor: 'pointer', boxShadow: '0 4px 16px rgba(67,160,71,0.4)' }}>
+          + Cargar primer archivo
+        </motion.button>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, width: '100%', maxWidth: 380 }}>
+        {[
+          { icon: '🔍', title: 'Consulta libre', desc: 'Pregunta cualquier cosa sobre tus datos' },
+          { icon: '⋈', title: 'Cruce inteligente', desc: 'Une archivos por columnas comunes' },
+          { icon: '📊', title: 'Dashboard', desc: 'Graficas y metricas automaticas' },
+          { icon: '🩺', title: 'Diagnostico', desc: 'Detecta nulos, duplicados y anomalias' },
+        ].map((item, i) => (
+          <motion.div key={i} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }} style={{ padding: '12px 14px', borderRadius: 12, border: `1px solid ${G.border}`, background: '#fff' }}>
+            <div style={{ fontSize: 20, marginBottom: 6 }}>{item.icon}</div>
+            <div style={{ fontSize: '0.75rem', fontWeight: 700, color: G.dark, fontFamily: 'Inter,sans-serif', marginBottom: 3 }}>{item.title}</div>
+            <div style={{ fontSize: '0.68rem', color: G.text2, fontFamily: 'Inter,sans-serif', lineHeight: 1.5, fontStyle: 'italic' }}>{item.desc}</div>
+          </motion.div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
-// ─── Mensaje de bienvenida ───────────────────────────────────────────────────
 const WELCOME = {
   id: 'welcome',
   role: 'assistant',
-  text: '¡Hola! Soy tu analista de datos. Carga uno o más archivos CSV o Excel y empieza a conversar con tus datos.\n\nPuedes preguntarme cosas como:\n• "¿Cuántos registros tiene el archivo?"\n• "Muestra los 10 clientes con más ventas"\n• "Cruza el archivo A con el archivo B por ID"\n• "Busca duplicados en la columna cédula"\n\nO escribe SQL directamente si prefieres control total.',
-  sql: null,
-  result: null,
-  error: null,
+  text: 'Hola! Soy tu analista de datos con IA.\n\nCarga un archivo CSV o Excel y preguntame lo que quieras:\n• "Cuantos registros hay con estado Inactivo?"\n• "Muestra el top 10 por valor de contrato"\n• "Busca duplicados en cedula"\n• "Cruza el archivo A con B y muestra los que no coinciden"',
+  sql: null, result: null, error: null,
   timestamp: new Date(),
 }
 
-let _msgId = 100
+let _msgId = 200
+const AI_AVAILABLE = isAiRuntimeConfigured()
 
-export default function ChatEngine({ tables, onExport, onExportExcel, addToast, onOpenCrossWizard, onOpenDashboard }) {
+export default function ChatEngine({
+  tables,
+  onExport,
+  onExportExcel,
+  addToast,
+  onOpenCrossWizard,
+  onOpenDashboard,
+  onOpenKnowledgeBase,
+  onOpenUploader,
+}) {
   const [messages, setMessages] = useState([WELCOME])
   const [input, setInput] = useState('')
   const [isThinking, setIsThinking] = useState(false)
-  const [useRemoteAI, setUseRemoteAI] = useState(false)
-  const [remoteStatus, setRemoteStatus] = useState('unknown') // unknown | online | offline
+  const [conversationHistory, setConversationHistory] = useState([])
   const [prevTableCount, setPrevTableCount] = useState(0)
   const bottomRef = useRef(null)
   const textareaRef = useRef(null)
-  const fallbackNotifiedRef = useRef(false)
-  // Memoria de conversación: rastrear columnas/tablas mencionadas y temas recurrentes
-  const contextRef = useRef({ queriesCount: 0, recentTopics: [], focusCol: null, focusTable: null })
 
-  const suggestions = useMemo(() => buildSuggestions(tables), [tables])
-
-  // Auto-scroll
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, isThinking])
 
-  // Auto-resize textarea
   useEffect(() => {
     const el = textareaRef.current
     if (!el) return
@@ -395,31 +336,8 @@ export default function ChatEngine({ tables, onExport, onExportExcel, addToast, 
     setMessages(prev => [...prev, { id: `msg-${++_msgId}`, timestamp: new Date(), ...msg }])
   }, [])
 
-  const handleToggleRemoteAI = useCallback(async () => {
-    if (useRemoteAI) {
-      setUseRemoteAI(false)
-      addToast?.('IA remota desactivada. Seguimos en modo local.', 'info', 'Asistente')
-      return
-    }
-
-    const healthy = await checkAgentHealth()
-    setRemoteStatus(healthy ? 'online' : 'offline')
-    setUseRemoteAI(true)
-    addToast?.(
-      healthy
-        ? 'IA remota activada. Si falla, regresaremos al modo local automáticamente.'
-        : 'Endpoint IA no disponible ahora. Se mantiene fallback local automático.',
-      healthy ? 'success' : 'warning',
-      'Asistente'
-    )
-  }, [useRemoteAI, addToast])
-
-  // ── Auto-Briefing Ejecutivo al cargar archivo ───────────────────────────────
   useEffect(() => {
-    if (tables.length <= prevTableCount) {
-      setPrevTableCount(tables.length)
-      return
-    }
+    if (tables.length <= prevTableCount) { setPrevTableCount(tables.length); return }
     const newTable = tables[tables.length - 1]
     setPrevTableCount(tables.length)
 
@@ -430,76 +348,46 @@ export default function ChatEngine({ tables, onExport, onExportExcel, addToast, 
         const rowCount = newTable.rowCount || 0
         const items = []
 
-        // 1. NULL analysis por columna
-        const nullExpr = cols.map(c => `COUNT(*) FILTER (WHERE "${c.name}" IS NULL) AS "${c.name}"`).join(', ')
-        const nullRow = nullExpr
-          ? (await executeQuery(`SELECT ${nullExpr} FROM "${newTable.name}"`))?.rows?.[0] || {}
-          : {}
-
-        const criticalNulls = []
-        const warningNulls = []
-        Object.entries(nullRow).forEach(([col, count]) => {
-          const pct = rowCount > 0 ? (Number(count) / rowCount) * 100 : 0
-          if (pct > 50) criticalNulls.push({ col, pct: pct.toFixed(1) })
-          else if (pct > 10) warningNulls.push({ col, pct: pct.toFixed(1) })
-        })
-
-        if (criticalNulls.length > 0) {
-          items.push({ severity: 'critical', text: `${criticalNulls.map(n => `${n.col} (${n.pct}% vacíos)`).join(', ')}. Alta tasa de valores faltantes — posible falla en fuente de datos.` })
-        }
-        if (warningNulls.length > 0) {
-          items.push({ severity: 'warning', text: `Columnas con vacíos parciales: ${warningNulls.map(n => `${n.col} (${n.pct}%)`).join(', ')}.` })
+        if (cols.length > 0) {
+          const nullExpr = cols.map(c => `COUNT(*) FILTER (WHERE "${c.name}" IS NULL) AS "${c.name}"`).join(', ')
+          const nullRow = (await executeQuery(`SELECT ${nullExpr} FROM "${newTable.name}"`))?.rows?.[0] || {}
+          const criticals = []
+          const warnings = []
+          Object.entries(nullRow).forEach(([col, count]) => {
+            const pct = rowCount > 0 ? (Number(count) / rowCount) * 100 : 0
+            if (pct > 50) criticals.push(`${col} (${pct.toFixed(1)}% vacios)`)
+            else if (pct > 10) warnings.push(`${col} (${pct.toFixed(1)}%)`)
+          })
+          if (criticals.length > 0) items.push({ severity: 'critical', text: `Alta tasa de vacios en: ${criticals.join(', ')}` })
+          if (warnings.length > 0) items.push({ severity: 'warning', text: `Vacios parciales en: ${warnings.join(', ')}` })
+          const cleanCount = cols.filter(c => !Number(nullRow[c.name])).length
+          if (criticals.length === 0 && warnings.length === 0) items.push({ severity: 'ok', text: `Datos limpios. ${cleanCount} columna(s) sin vacios.` })
+          else if (cleanCount > 0) items.push({ severity: 'ok', text: `${cleanCount} columna(s) completamente limpias.` })
         }
 
-        // 2. Detección de duplicados en columna clave
-        const keyCol = cols.find(c => /id|ium|c[oó]digo|clave|cedula|c[eé]dula|nit|serial|ref\b/i.test(c.name))
+        const keyCol = cols.find(c => /id|ium|c[ou]d|clave|cedula|nit|serial|ref|folio|cuenta/i.test(c.name))
         if (keyCol && rowCount > 0) {
           try {
             const dupRes = await executeQuery(`SELECT COUNT(*) - COUNT(DISTINCT TRIM(CAST("${keyCol.name}" AS VARCHAR))) AS dups FROM "${newTable.name}"`)
-            const dupCount = Number(dupRes?.rows?.[0]?.dups || 0)
-            if (dupCount > 0) {
-              items.push({ severity: 'warning', text: `${dupCount.toLocaleString()} ${dupCount === 1 ? 'duplicado detectado' : 'duplicados detectados'} en "${keyCol.name}". Verifica IDs únicos.` })
-            }
-          } catch { /* no critico */ }
+            const dups = Number(dupRes?.rows?.[0]?.dups || 0)
+            if (dups > 0) items.push({ severity: 'warning', text: `${dups.toLocaleString()} duplicado(s) en "${keyCol.name}".` })
+          } catch { }
         }
 
-        // 3. Columnas con un solo valor (constantes / anomalía de proceso)
-        const constantCols = []
-        for (const col of cols.slice(0, 12)) {
-          try {
-            const dRes = await executeQuery(`SELECT COUNT(DISTINCT "${col.name}") AS d, MIN(CAST("${col.name}" AS VARCHAR)) AS v FROM "${newTable.name}"`)
-            const d = Number(dRes?.rows?.[0]?.d || 0)
-            if (d === 1 && rowCount > 1) constantCols.push({ col: col.name, val: dRes?.rows?.[0]?.v })
-          } catch { /* skip */ }
-        }
-        if (constantCols.length > 0) {
-          items.push({ severity: 'insight', text: `${constantCols.map(c => `"${c.col}" = "${c.val}"`).join(' · ')} — ${constantCols.length === 1 ? 'columna' : 'columnas'} con valor único en todas las filas. Posible resultado de un proceso fallido.` })
-        }
-
-        // 4. Columnas OK
-        const cleanCount = cols.filter(c => !Number(nullRow[c.name])).length
-        if (criticalNulls.length === 0 && warningNulls.length === 0 && !constantCols.length) {
-          items.push({ severity: 'ok', text: `Datos limpios. ${cleanCount} columna(s) sin valores vacíos. ✅` })
-        } else if (cleanCount > 0) {
-          items.push({ severity: 'ok', text: `${cleanCount} columna(s) completamente limpias.` })
-        }
-
-        // 5. Sugerencias contextuales
         const sugs = []
-        if (keyCol) sugs.push(`¿Hay duplicados en ${keyCol.name}?`)
-        if (criticalNulls.length > 0) sugs.push(`¿Por qué hay NULLs en ${criticalNulls[0].col}?`)
-        if (constantCols.length > 0) sugs.push(`Muestra filas donde ${constantCols[0].col} = "${constantCols[0].val}"`)
-        sugs.push(`Muestra los primeros 10 registros`)
+        if (keyCol) sugs.push(`Hay duplicados en ${keyCol.name}?`)
+        sugs.push(`Muestra los primeros 10 registros de ${newTable.name}`)
+        sugs.push(`Cuantos registros tiene ${newTable.name}?`)
         if (tables.length >= 2) sugs.push(`Cruza ${newTable.name} con ${tables[tables.length - 2]?.name}`)
 
         addMsg({
           role: 'assistant',
-          text: `Analicé **"${newTable.name}"** automáticamente. Aquí el diagnóstico ejecutivo:`,
+          text: `Analice "${newTable.name}" (${rowCount.toLocaleString()} filas · ${cols.length} columnas). Diagnostico automatico:`,
           sql: null, result: null, error: null,
           briefing: { tableName: newTable.name, rowCount, colCount: cols.length, items, suggestions: sugs.slice(0, 4) },
         })
       } catch {
-        addMsg({ role: 'assistant', text: `Cargué **"${newTable.name}"** (${(newTable.rowCount || 0).toLocaleString()} filas). ¿Qué quieres analizar?`, sql: null, result: null, error: null })
+        addMsg({ role: 'assistant', text: `Listo! Cargue "${newTable.name}" (${(newTable.rowCount || 0).toLocaleString()} filas). Que quieres analizar?`, sql: null, result: null, error: null })
       } finally {
         setIsThinking(false)
       }
@@ -510,318 +398,196 @@ export default function ChatEngine({ tables, onExport, onExportExcel, addToast, 
   const handleSend = useCallback(async (text = input.trim()) => {
     if (!text || isThinking) return
     setInput('')
-
     addMsg({ role: 'user', text })
     setIsThinking(true)
 
-  // Actualizar memoria de conversación
-  const ctx = contextRef.current
-  ctx.queriesCount += 1
-  ctx.recentTopics = [...ctx.recentTopics.slice(-4), text.toLowerCase()]
-  const allCols = tables.flatMap(t => (t.columns || []).map(c => c.name))
-  const mentioned = allCols.find(col => text.toLowerCase().includes(col.toLowerCase()))
-  if (mentioned) ctx.focusCol = mentioned
-  if (tables.length === 1) ctx.focusTable = tables[0].name
-
-  try {
+    try {
       if (!tables.length) {
-        addMsg({ role: 'assistant', text: 'Primero carga un archivo. Usa el botón **"Cargar archivo"** en la barra superior.', sql: null, result: null, error: null })
+        addMsg({ role: 'assistant', text: 'Primero carga un archivo CSV o Excel usando el boton "Cargar archivos".', sql: null, result: null, error: null })
         return
       }
 
-      if (useRemoteAI) {
-        const remote = await queryAgent(text)
-        if (remote?.action && remote.action !== 'error') {
-          setRemoteStatus('online')
-          fallbackNotifiedRef.current = false
-
-          const remoteRows = Array.isArray(remote.rows) ? remote.rows : []
-          if (remoteRows.length > 0) {
-            const remoteResult = {
-              rows: remoteRows,
-              rowCount: Number.isFinite(remote.rowCount) ? remote.rowCount : remoteRows.length,
-              columns: Array.isArray(remote.columns) ? remote.columns : Object.keys(remoteRows[0] || {}),
-              duration: remote.duration,
-            }
-            addMsg({
-              role: 'assistant',
-              text: remote.description || buildInsight(remote.sql || '', remoteResult, '', contextRef.current),
-              sql: remote.sql || null,
-              result: remoteResult,
-              error: null,
-            })
-            return
-          }
-
-          if (remote.sql) {
+      if (!AI_AVAILABLE) {
+        addMsg({ role: 'assistant', text: 'La IA no esta configurada aun. Aqui tienes como activarla gratis:', sql: null, result: null, error: null, isSetupGuide: true })
+        try {
+          const parsed = parseCommand(text, tables)
+          if (parsed?.sql && !parsed?.error) {
             const start = performance.now()
-            const localResult = await executeQuery(remote.sql)
+            const result = await executeQuery(parsed.sql)
             const duration = ((performance.now() - start) / 1000).toFixed(3)
-            addMsg({
-              role: 'assistant',
-              text: remote.description || buildInsight(remote.sql, localResult, '', contextRef.current),
-              sql: remote.sql,
-              result: { ...localResult, duration },
-              error: null,
-              duration,
+            addMsg({ role: 'assistant', text: `(Modo local sin IA) ${parsed.description || ''}`, sql: parsed.sql, result: { ...result, duration }, error: null })
+          }
+        } catch { }
+        return
+      }
+
+      const { sql: aiSql, explanation: aiExplanation } = await runAiTask({
+        task: 'sql.generate',
+        prompt: text,
+        tables,
+        history: conversationHistory,
+      })
+
+      let result = null
+      let finalSql = aiSql
+      let finalExplanation = aiExplanation
+
+      if (aiSql) {
+        try {
+          const start = performance.now()
+          result = await executeQuery(aiSql)
+          result = { ...result, duration: ((performance.now() - start) / 1000).toFixed(3) }
+        } catch (sqlErr) {
+          try {
+            const retryPrompt = `El SQL fallo con error en DuckDB: "${sqlErr.message}"\n\nSQL intentado:\n\`\`\`sql\n${aiSql}\n\`\`\`\n\nPor favor corrije el SQL.`
+            const retryHistory = [
+              ...conversationHistory,
+              { role: 'user', content: text },
+              { role: 'assistant', content: aiExplanation + `\n\`\`\`sql\n${aiSql}\n\`\`\`` },
+            ]
+            const retry = await runAiTask({
+              task: 'sql.repair',
+              prompt: retryPrompt,
+              tables,
+              history: retryHistory,
+              context: {
+                failedSql: aiSql,
+                sqlError: sqlErr.message,
+              },
             })
+            if (retry.sql) {
+              const start = performance.now()
+              result = await executeQuery(retry.sql)
+              result = { ...result, duration: ((performance.now() - start) / 1000).toFixed(3) }
+              finalSql = retry.sql
+              finalExplanation = retry.explanation
+            } else {
+              addMsg({ role: 'assistant', text: finalExplanation, sql: aiSql, result: null, error: `Error de SQL: ${sqlErr.message}` })
+              return
+            }
+          } catch {
+            addMsg({ role: 'assistant', text: null, sql: aiSql, result: null, error: `Error al ejecutar la consulta: ${sqlErr.message}` })
             return
           }
-        } else {
-          setRemoteStatus('offline')
-          if (!fallbackNotifiedRef.current) {
-            addToast?.('IA remota no disponible. Continuamos con motor local.', 'warning', 'Fallback automático')
-            fallbackNotifiedRef.current = true
-          }
         }
       }
 
-      let parsed = null
-      try {
-        parsed = parseCommand(text, tables)
-      } catch {
-        const fallbackTable = tables[0]?.name
-        if (!fallbackTable) {
-          addMsg({ role: 'assistant', text: null, sql: null, result: null, error: 'No pude interpretar el mensaje y no hay archivos cargados.' })
-          return
-        }
-        parsed = {
-          sql: `SELECT * FROM "${fallbackTable}" LIMIT 50;`,
-          action: 'query',
-          description: `Vista rápida de "${fallbackTable}"`,
-        }
-      }
+      addMsg({ role: 'assistant', text: finalExplanation, sql: finalSql, result, error: null })
 
-      if (parsed.error) {
-        addMsg({ role: 'assistant', text: null, sql: null, result: null, error: parsed.error })
-        return
-      }
-
-      if (parsed.action === 'help') {
-        addMsg({
-          role: 'assistant',
-          text: 'Puedo ayudarte con:\n• **Consultar** datos en lenguaje natural o SQL\n• **Filtrar** registros con condiciones\n• **Agrupar y calcular** estadísticas\n• **Cruzar** dos archivos por columnas comunes\n• **Actualizar, agregar o eliminar** registros\n• **Exportar** resultados a CSV o Excel\n\nEscribe tu pregunta y la respondo al instante.',
-          sql: null, result: null, error: null,
-        })
-        return
-      }
-
-      if (parsed.action === 'export') {
-        addMsg({ role: 'assistant', text: 'Para exportar, usa los botones **⬇ CSV** o **⬇ Excel** que aparecen junto a cada resultado.', sql: null, result: null, error: null })
-        return
-      }
-
-      if (parsed.action === 'reorderColumns') {
-        addMsg({ role: 'assistant', text: 'Para reordenar columnas usa el modo **SQL Directo** o el comando exacto: "Reordena columnas de [tabla]: col1, col2, col3".', sql: null, result: null, error: null })
-        return
-      }
-
-      const start = performance.now()
-      const result = await executeQuery(parsed.sql)
-      const duration = ((performance.now() - start) / 1000).toFixed(3)
-
-      const insight = buildInsight(parsed.sql, result, parsed.description, contextRef.current)
-      addMsg({ role: 'assistant', text: insight, sql: parsed.sql, result: { ...result, duration }, error: null, duration })
+      setConversationHistory(prev => [
+        ...prev,
+        { role: 'user', content: text },
+        { role: 'assistant', content: finalExplanation + (finalSql ? `\n\`\`\`sql\n${finalSql}\n\`\`\`` : '') },
+      ].slice(-12))
 
     } catch (err) {
       const msg = err?.message || String(err)
-      const isOOM = msg.includes('malloc') || msg.toLowerCase().includes('out of memory') || msg.toLowerCase().includes('oom')
-      addMsg({
-        role: 'assistant',
-        text: null,
-        sql: null,
-        result: null,
-        error: isOOM
-          ? 'Los archivos son muy grandes para procesarlos de una vez. Filtra primero con WHERE o usa el Asistente de Cruce (⋈).'
-          : `No pude ejecutar esa consulta: ${msg}`,
-      })
+      if (msg.includes('malloc') || msg.toLowerCase().includes('out of memory')) {
+        addMsg({ role: 'assistant', text: null, sql: null, result: null, error: 'Archivos demasiado grandes. Filtra con WHERE o usa el Asistente de Cruce.' })
+      } else {
+        addMsg({ role: 'assistant', text: null, sql: null, result: null, error: `Error: ${msg}` })
+      }
     } finally {
       setIsThinking(false)
     }
-  }, [input, tables, isThinking, addMsg, useRemoteAI, addToast])
+  }, [input, tables, isThinking, addMsg, conversationHistory])
 
-  // Permite inyectar preguntas desde otros módulos (ej. Asistente de Cruce)
+  const handleConsolidate = useCallback(() => {
+    if (tables.length < 2) { addToast?.('Carga al menos 2 archivos para consolidar.', 'info'); return }
+    const names = tables.map(t => `"${t.name}"`).join(', ')
+    handleSend(`Consolida todos los archivos (${names}) en una sola tabla usando UNION ALL y muestra el total de filas.`)
+  }, [tables, handleSend])
+
   useEffect(() => {
-    const onPrompt = (event) => {
-      const prompt = event?.detail?.prompt
-      if (typeof prompt === 'string' && prompt.trim()) {
-        handleSend(prompt.trim())
-      }
+    const onPrompt = (e) => {
+      const prompt = e?.detail?.prompt
+      if (typeof prompt === 'string' && prompt.trim()) handleSend(prompt.trim())
     }
     window.addEventListener('ds-chat-prompt', onPrompt)
     return () => window.removeEventListener('ds-chat-prompt', onPrompt)
   }, [handleSend])
 
   const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
-    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
   }
 
-  const showSuggestions = suggestions.length > 0 && messages.length <= 3 && !isThinking
-  const basicDeck = useMemo(() => {
+  const suggestions = useMemo(() => {
     if (!tables.length) return []
-    const t0 = tables[0]?.name
-    return [
-      { label: 'Muéstrame algo', prompt: `quiero ver algo de ${t0}` },
-      { label: 'Resúmelo', prompt: `analiza ${t0}` },
-      { label: '¿Qué está mal?', prompt: `encuentra problemas en ${t0}` },
-      { label: 'Dame top 10', prompt: `muestra top 10 de ${t0}` },
+    const t0 = tables[0]
+    const cols = t0.columns || []
+    const keyCol = cols.find(c => /id|ium|c[ou]d|clave|cedula|nit/i.test(c.name))
+    const s = [
+      `Muestra los primeros 20 registros de ${t0.name}`,
+      `Cuantos registros tiene ${t0.name}?`,
+      `Busca valores nulos en ${t0.name}`,
     ]
+    if (keyCol) s.push(`Hay duplicados en ${keyCol.name}?`)
+    if (tables.length >= 2) s.push(`Cruza ${tables[0].name} con ${tables[1].name}`)
+    return s.slice(0, 5)
   }, [tables])
+
+  const showSuggestions = suggestions.length > 0 && messages.length <= 3 && !isThinking
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#F4F7F4' }}>
+      <ActionBar
+        tables={tables}
+        onOpenCrossWizard={onOpenCrossWizard}
+        onOpenDashboard={onOpenDashboard}
+        onOpenKnowledgeBase={onOpenKnowledgeBase}
+        onConsolidate={handleConsolidate}
+        isThinking={isThinking}
+      />
 
-      {/* ── Área de mensajes ── */}
-      <div
-        style={{ flex: 1, overflowY: 'auto', padding: '20px 28px', display: 'flex', flexDirection: 'column', gap: 16, scrollbarWidth: 'thin', scrollbarColor: `${G.primary} ${G.light}` }}
-      >
-        {messages.map(msg =>
-          msg.role === 'user'
-            ? <UserMessage key={msg.id} msg={msg} />
-            : <AssistantMessage key={msg.id} msg={msg} onExport={onExport} onExportExcel={onExportExcel} onSuggest={handleSend} />
-        )}
-        {isThinking && <TypingIndicator />}
-        <div ref={bottomRef} />
-      </div>
+      {tables.length === 0 ? (
+        <EmptyState onOpenUploader={onOpenUploader} />
+      ) : (
+        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 28px', display: 'flex', flexDirection: 'column', gap: 16, scrollbarWidth: 'thin', scrollbarColor: `${G.primary} ${G.light}` }}>
+          {messages.map(msg =>
+            msg.role === 'user'
+              ? <UserMessage key={msg.id} msg={msg} />
+              : <AssistantMessage key={msg.id} msg={msg} onExport={onExport} onExportExcel={onExportExcel} onSuggest={handleSend} />
+          )}
+          {isThinking && <TypingIndicator />}
+          <div ref={bottomRef} />
+        </div>
+      )}
 
-      {/* ── Sugerencias automáticas ── */}
       <AnimatePresence>
         {showSuggestions && (
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            style={{ padding: '8px 24px 6px', display: 'flex', flexWrap: 'wrap', gap: 6, borderTop: `1px solid ${G.border}`, background: '#fff' }}
-          >
-            <span style={{ fontSize: '0.68rem', color: G.dim, fontFamily: 'Inter,sans-serif', alignSelf: 'center', marginRight: 4 }}>Sugerencias:</span>
+          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} style={{ padding: '8px 20px 6px', display: 'flex', flexWrap: 'wrap', gap: 6, borderTop: `1px solid ${G.border}`, background: '#fff' }}>
+            <span style={{ fontSize: '0.67rem', color: G.dim, fontFamily: 'Inter,sans-serif', alignSelf: 'center', marginRight: 4 }}>Prueba:</span>
             {suggestions.map((s, i) => (
-              <motion.button
-                key={i}
-                whileHover={{ scale: 1.03, background: G.light }}
-                whileTap={{ scale: 0.96 }}
-                onClick={() => handleSend(s)}
-                style={{ padding: '4px 12px', borderRadius: 20, border: `1px solid ${G.border}`, background: '#F7FBF7', color: G.text2, fontSize: '0.72rem', fontFamily: 'Inter,sans-serif', cursor: 'pointer', fontWeight: 500, transition: 'background 0.15s' }}
-              >
-                {s}
-              </motion.button>
+              <motion.button key={i} whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.96 }} onClick={() => handleSend(s)} style={{ padding: '4px 12px', borderRadius: 20, border: `1px solid ${G.border}`, background: '#F7FBF7', color: G.text2, fontSize: '0.72rem', fontFamily: 'Inter,sans-serif', cursor: 'pointer', fontWeight: 500 }}>{s}</motion.button>
             ))}
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* ── Deck ultra-simple ── */}
-      {basicDeck.length > 0 && !isThinking && (
-        <div style={{ padding: '8px 24px', display: 'flex', gap: 8, flexWrap: 'wrap', borderTop: `1px solid ${G.border}`, background: '#FDFEFD' }}>
-          <span style={{ fontSize: '0.66rem', color: G.dim, fontFamily: 'Inter,sans-serif', alignSelf: 'center', marginRight: 2 }}>Modo simple:</span>
-          {basicDeck.map((item) => (
-            <button
-              key={item.label}
-              onClick={() => handleSend(item.prompt)}
-              style={{ padding: '5px 11px', borderRadius: 16, border: `1px solid ${G.border}`, background: '#fff', color: G.text2, fontSize: '0.7rem', fontFamily: 'Inter,sans-serif', cursor: 'pointer', fontWeight: 600 }}
-            >
-              {item.label}
-            </button>
-          ))}
+      {tables.length > 0 && (
+        <div style={{ padding: '12px 20px', borderTop: `1px solid ${G.border}`, background: '#fff', display: 'flex', gap: 10, alignItems: 'flex-end' }}>
+          <motion.div animate={{ boxShadow: input ? `0 0 0 2px rgba(67,160,71,0.35)` : `0 0 0 1px ${G.border}` }} style={{ flex: 1, borderRadius: 14, overflow: 'hidden', background: '#FAFCFA' }}>
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              disabled={isThinking}
+              placeholder={AI_AVAILABLE ? 'Hazme cualquier pregunta sobre tus datos... (Enter para enviar)' : 'Configura VITE_AI_ORCHESTRATOR_URL o VITE_GROQ_API_KEY (ver guia arriba)'}
+              rows={1}
+              style={{ width: '100%', resize: 'none', border: 'none', outline: 'none', background: 'transparent', padding: '11px 16px', fontSize: '0.88rem', fontFamily: 'Inter,sans-serif', color: G.text, maxHeight: 140, lineHeight: 1.55, boxSizing: 'border-box' }}
+            />
+          </motion.div>
+          <div title={AI_AVAILABLE ? 'IA activa (orchestrator o fallback)' : 'Sin IA - configura runtime'} style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, marginBottom: 20, background: AI_AVAILABLE ? '#43A047' : '#FFB300', boxShadow: AI_AVAILABLE ? '0 0 6px rgba(67,160,71,0.8)' : '0 0 6px rgba(255,179,0,0.8)' }} />
+          <motion.button onClick={() => handleSend()} disabled={!input.trim() || isThinking} whileHover={{ scale: input.trim() && !isThinking ? 1.06 : 1 }} whileTap={{ scale: input.trim() && !isThinking ? 0.93 : 1 }}
+            style={{ width: 46, height: 46, borderRadius: 13, flexShrink: 0, border: 'none', cursor: input.trim() && !isThinking ? 'pointer' : 'not-allowed', background: input.trim() && !isThinking ? `linear-gradient(135deg, ${G.primary}, ${G.dark})` : G.border, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: input.trim() && !isThinking ? '0 4px 14px rgba(67,160,71,0.4)' : 'none', transition: 'background 0.2s' }}>
+            {isThinking
+              ? <motion.span animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 0.8, ease: 'linear' }} style={{ width: 16, height: 16, border: '2px solid white', borderTopColor: 'transparent', borderRadius: '50%', display: 'block' }} />
+              : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="white" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
+            }
+          </motion.button>
         </div>
       )}
-
-      {/* ── Acciones rápidas ── */}
-      {tables.length >= 2 && (
-        <div style={{ padding: '6px 24px', display: 'flex', gap: 8, borderTop: `1px solid ${G.border}`, background: '#F7FBF7' }}>
-          <button
-            onClick={onOpenCrossWizard}
-            style={{ padding: '5px 13px', borderRadius: 8, border: `1px solid ${G.border}`, background: '#fff', color: G.dark, fontSize: '0.72rem', fontFamily: 'Inter,sans-serif', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}
-          >
-            ⋈ Asistente de Cruce
-          </button>
-          <button
-            onClick={onOpenDashboard}
-            style={{ padding: '5px 13px', borderRadius: 8, border: `1px solid ${G.border}`, background: '#fff', color: G.dark, fontSize: '0.72rem', fontFamily: 'Inter,sans-serif', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}
-          >
-            📊 Dashboard
-          </button>
-          <button
-            onClick={handleToggleRemoteAI}
-            style={{
-              padding: '5px 13px', borderRadius: 8, border: `1px solid ${G.border}`,
-              background: useRemoteAI ? '#E8F5E9' : '#fff',
-              color: useRemoteAI ? G.dark : G.text2,
-              fontSize: '0.72rem', fontFamily: 'Inter,sans-serif', cursor: 'pointer', fontWeight: 600,
-              display: 'flex', alignItems: 'center', gap: 6,
-            }}
-            title="Activa IA remota opcional; si falla, vuelve a modo local automáticamente"
-          >
-            <span
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                background: remoteStatus === 'online' ? '#2E7D32' : remoteStatus === 'offline' ? '#C62828' : '#9EBB9E',
-              }}
-            />
-            {useRemoteAI ? 'IA remota ON' : 'IA remota OFF'}
-          </button>
-        </div>
-      )}
-
-      {/* ── Input ── */}
-      <div style={{ padding: '12px 24px', borderTop: `1px solid ${G.border}`, background: '#fff', display: 'flex', gap: 10, alignItems: 'flex-end' }}>
-        <motion.div
-          animate={{ boxShadow: input ? `0 0 0 2px rgba(67,160,71,0.35)` : `0 0 0 1px ${G.border}` }}
-          style={{ flex: 1, borderRadius: 14, overflow: 'hidden', background: '#FAFCFA' }}
-        >
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={isThinking}
-            placeholder={tables.length ? 'Hazme una pregunta sobre tus datos... (Enter para enviar, Shift+Enter para nueva línea)' : 'Carga un archivo para comenzar...'}
-            rows={1}
-            style={{
-              width: '100%', resize: 'none', border: 'none', outline: 'none',
-              background: 'transparent', padding: '11px 16px',
-              fontSize: '0.88rem', fontFamily: 'Inter,sans-serif',
-              color: G.text, maxHeight: 140, lineHeight: 1.55,
-              boxSizing: 'border-box',
-            }}
-          />
-        </motion.div>
-
-        <motion.button
-          onClick={() => handleSend()}
-          disabled={!input.trim() || isThinking}
-          whileHover={{ scale: input.trim() && !isThinking ? 1.06 : 1 }}
-          whileTap={{ scale: input.trim() && !isThinking ? 0.93 : 1 }}
-          style={{
-            width: 46, height: 46, borderRadius: 13, flexShrink: 0,
-            background: input.trim() && !isThinking
-              ? `linear-gradient(135deg, ${G.primary}, ${G.dark})`
-              : '#E0E8E0',
-            border: 'none',
-            cursor: input.trim() && !isThinking ? 'pointer' : 'not-allowed',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: input.trim() && !isThinking ? '0 4px 14px rgba(67,160,71,0.35)' : 'none',
-            transition: 'background 0.2s, box-shadow 0.2s',
-          }}
-        >
-          {isThinking ? (
-            <motion.div
-              style={{ width: 19, height: 19, border: '2.5px solid white', borderTopColor: 'transparent', borderRadius: '50%' }}
-              animate={{ rotate: 360 }}
-              transition={{ duration: 0.75, repeat: Infinity, ease: 'linear' }}
-            />
-          ) : (
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="22" y1="2" x2="11" y2="13" />
-              <polygon points="22 2 15 22 11 13 2 9 22 2" />
-            </svg>
-          )}
-        </motion.button>
-      </div>
     </div>
   )
 }

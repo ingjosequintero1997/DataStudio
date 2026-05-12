@@ -14,10 +14,10 @@ export default function App() {
 
   if (user === undefined) {
     return (
-      <div className="flex items-center justify-center h-full bg-ssms-bg">
+      <div className="flex items-center justify-center h-full" style={{ background: '#F4F7F4' }}>
         <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-2 border-ssms-accent border-t-transparent rounded-full animate-spin" />
-          <span className="text-ssms-textDim text-sm">Iniciando...</span>
+          <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#43A047', borderTopColor: 'transparent' }} />
+          <span className="text-sm" style={{ color: '#4A6B4A' }}>Iniciando...</span>
         </div>
       </div>
     )

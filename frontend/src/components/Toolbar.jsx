@@ -59,6 +59,7 @@ export default function Toolbar({
   onOpenKnowledgeBase, onOpenDashboard,
   isExecuting, hasResults, dbReady, onSignOut, onToggleDrawer,
 }) {
+  // Cross/Consolidate/Dashboard/KB buttons moved to ChatEngine ActionBar
   return (
     <div className="flex flex-col shrink-0">
 
@@ -137,29 +138,6 @@ export default function Toolbar({
           gradient="linear-gradient(135deg, #059669 0%, #047857 100%)" glow="rgba(5,150,105,0.35)"
           icon={<svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>}
           label="Cargar archivos"
-        />
-        <Divider />
-        <PremiumButton onClick={onCrossTable} disabled={!dbReady || isExecuting}
-          gradient="linear-gradient(135deg, #0078d4 0%, #0056b3 100%)" glow="rgba(0,120,212,0.35)"
-          icon={<svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" /></svg>}
-          label="Cruzar"
-        />
-        <PremiumButton onClick={onConsolidate} disabled={!dbReady || isExecuting}
-          gradient="linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)" glow="rgba(79,70,229,0.35)"
-          icon={<svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>}
-          label="Consolidar"
-        />
-        <PremiumButton onClick={onOpenKnowledgeBase} disabled={!dbReady}
-          gradient="linear-gradient(135deg, #16a34a 0%, #166534 100%)" glow="rgba(22,163,74,0.35)"
-          icon={<svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.746 0 3.332.477 4.5 1.253v13C19.832 18.477 18.246 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg>}
-          label="Base conocimiento"
-          title="Base de conocimiento compartida"
-        />
-        <PremiumButton onClick={onOpenDashboard} disabled={!dbReady || (!hasResults && !dbReady)}
-          gradient="linear-gradient(135deg, #2E7D32 0%, #145A32 100%)" glow="rgba(46,125,50,0.35)"
-          icon={<svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20h10M9 16V8m6 8V4M5 16v-4m14 4v-6" /></svg>}
-          label="Dashboard"
-          title="Crear dashboard profesional"
         />
         <Divider />
         <PremiumButton onClick={onCleanColumns} disabled={!dbReady}

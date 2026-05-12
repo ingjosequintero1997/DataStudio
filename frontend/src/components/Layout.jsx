@@ -549,7 +549,10 @@ export default function Layout({ user }) {
                   setShowCrossWizard(true)
                 }}
                 onOpenDashboard={() => setShowDashboardStudio(true)}
+                onOpenKnowledgeBase={() => setShowKnowledgeBase(true)}
+                onOpenUploader={() => setShowUploader(true)}
               />
+
             </div>
           )}
 
