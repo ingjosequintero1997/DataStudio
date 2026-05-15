@@ -12,6 +12,17 @@ function formatRows(n) {
   if (n >= 1000) return `${(n / 1000).toFixed(0)}k filas`
   return `${n} filas`
 }
+
+function summarizeTypes(columns = []) {
+  const byType = new Map()
+  columns.forEach((c) => {
+    const key = String(c.type || 'UNKNOWN').toUpperCase()
+    byType.set(key, (byType.get(key) || 0) + 1)
+  })
+  return Array.from(byType.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+}
 const TYPE_COLORS = {
   VARCHAR: 'text-emerald-400', INTEGER: 'text-blue-400', BIGINT: 'text-blue-400',
   DOUBLE: 'text-purple-400', FLOAT: 'text-purple-400', BOOLEAN: 'text-yellow-400',
@@ -19,15 +30,34 @@ const TYPE_COLORS = {
 }
 const spring = { type: 'spring', stiffness: 380, damping: 28 }
 
-export default function ObjectExplorer({ tables, onInsertCommand, onDeleteTable, onDeleteAllTables, onOpenUploader, onSelectTable, selectedTable }) {
+export default function ObjectExplorer({
+  tables,
+  onInsertCommand,
+  onDeleteTable,
+  onDeleteAllTables,
+  onOpenUploader,
+  onSelectTable,
+  selectedTable,
+  theme = 'light',
+}) {
   const [tooltip, setTooltip] = useState(null)
+  const isDark = theme === 'dark'
+  const C = {
+    panel: isDark ? '#0D1511' : '#F4F7F4',
+    header: isDark ? '#102019' : '#E8F5E9',
+    border: isDark ? 'rgba(16,185,129,0.22)' : '#C8DCC8',
+    text: isDark ? '#E2F5E2' : '#1B3318',
+    dim: isDark ? 'rgba(160,205,170,0.75)' : '#4A6B4A',
+    card: isDark ? '#13231B' : '#fff',
+    cardAlt: isDark ? '#0F1D16' : '#F1FAF1',
+  }
 
   return (
-    <div className="flex flex-col h-full relative" style={{ background: '#F4F7F4', borderRight: '1px solid #C8DCC8' }}>
+    <div className="flex flex-col h-full relative" style={{ background: C.panel, borderRight: `1px solid ${C.border}` }}>
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2.5 shrink-0"
-        style={{ borderBottom: '1px solid #C8DCC8', background: '#E8F5E9' }}>
-        <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: '#2E7D32', letterSpacing: '0.12em' }}>
+        style={{ borderBottom: `1px solid ${C.border}`, background: C.header }}>
+        <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: isDark ? '#10B981' : '#2E7D32', letterSpacing: '0.12em' }}>
           Archivos Cargados
         </span>
         <div className="flex items-center gap-1.5">
@@ -83,13 +113,15 @@ export default function ObjectExplorer({ tables, onInsertCommand, onDeleteTable,
                   initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -20 }} transition={{ ...spring, delay: i * 0.05 }}
                   layout
-                  onClick={() => onSelectTable?.(table.name)}
+                  onClick={() => {
+                    onSelectTable?.(table.name)
+                  }}
                   onMouseEnter={e => { const r = e.currentTarget.getBoundingClientRect(); setTooltip({ name: table.name, x: r.right + 8, y: r.top }) }}
                   onMouseLeave={() => setTooltip(null)}
                   className="group relative rounded-xl cursor-pointer p-3"
                   style={isSelected
-                    ? { border: '1px solid #43A047', background: '#E8F5E9', boxShadow: '0 0 16px rgba(67,160,71,0.15)' }
-                    : { border: '1px solid #C8DCC8', background: '#fff' }}
+                    ? { border: '1px solid #43A047', background: isDark ? '#163326' : '#E8F5E9', boxShadow: '0 0 16px rgba(67,160,71,0.15)' }
+                    : { border: `1px solid ${C.border}`, background: C.card }}
                   whileHover={isSelected ? {} : { borderColor: '#43A047', backgroundColor: '#F1FAF1' }}
                 >
                   <div className="flex items-start justify-between gap-1">
@@ -100,7 +132,7 @@ export default function ObjectExplorer({ tables, onInsertCommand, onDeleteTable,
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
                         </svg>
                       </div>
-                      <span className="text-xs font-semibold truncate" style={{ color: '#1B3318' }}>{table.name}</span>
+                      <span className="text-xs font-semibold truncate" style={{ color: C.text }}>{table.name}</span>
                     </div>
                     <motion.button onClick={e => { e.stopPropagation(); onDeleteTable(table.name) }}
                       whileHover={{ scale: 1.2 }} whileTap={{ scale: 0.85 }} transition={spring}
@@ -125,7 +157,22 @@ export default function ObjectExplorer({ tables, onInsertCommand, onDeleteTable,
                         {table.columns.length} cols
                       </span>
                     )}
+                    <span
+                      className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
+                      style={{
+                        background: table.columns?.length ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)',
+                        border: table.columns?.length ? '1px solid rgba(34,197,94,0.26)' : '1px solid rgba(239,68,68,0.26)',
+                        color: table.columns?.length ? '#4ADE80' : '#FCA5A5',
+                      }}>
+                      {table.columns?.length ? 'listo' : 'error'}
+                    </span>
                   </div>
+
+                  {!!table.columns?.length && (
+                    <div className="mt-2 text-[10px]" style={{ color: C.dim }}>
+                      Tipos: {summarizeTypes(table.columns).map(([type, count]) => `${type}(${count})`).join(' · ')}
+                    </div>
+                  )}
 
                   <div className="hidden group-hover:flex gap-1 mt-2">
                     {[
@@ -137,7 +184,7 @@ export default function ObjectExplorer({ tables, onInsertCommand, onDeleteTable,
                         onClick={e => { e.stopPropagation(); onInsertCommand?.(btn.cmd) }}
                         whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.95 }} transition={spring}
                         className="flex-1 text-[10px] py-0.5 rounded font-medium"
-                        style={{ background: btn.color, color: btn.text }}>
+                        style={{ background: isDark ? C.cardAlt : btn.color, color: isDark ? '#CDEDD1' : btn.text, border: isDark ? `1px solid ${C.border}` : 'none' }}>
                         {btn.label}
                       </motion.button>
                     ))}
@@ -147,11 +194,6 @@ export default function ObjectExplorer({ tables, onInsertCommand, onDeleteTable,
             })
           )}
         </AnimatePresence>
-      </div>
-
-      {/* Footer credits */}
-      <div className="px-4 py-2.5 shrink-0" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
-        <p className="text-[9px] font-medium tracking-wide" style={{ color: '#9EBB9E' }}>Desarrollado por el Ing. José Quintero</p>
       </div>
 
       {/* Tooltip */}

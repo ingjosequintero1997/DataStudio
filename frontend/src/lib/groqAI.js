@@ -5,9 +5,37 @@
 
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 const MODEL = 'llama-3.1-8b-instant'
+const GROQ_KEY_STORAGE = 'datastudio-groq-api-key'
+
+function readGroqKeyFromStorage() {
+  if (typeof window === 'undefined') return ''
+  try {
+    return window.localStorage.getItem(GROQ_KEY_STORAGE) || ''
+  } catch {
+    return ''
+  }
+}
+
+export function getGroqApiKey() {
+  const envKey = (import.meta.env.VITE_GROQ_API_KEY || '').trim()
+  if (envKey) return envKey
+  return (readGroqKeyFromStorage() || '').trim()
+}
+
+export function setGroqApiKey(value) {
+  if (typeof window === 'undefined') return
+  const clean = (value || '').trim()
+  try {
+    if (!clean) {
+      window.localStorage.removeItem(GROQ_KEY_STORAGE)
+      return
+    }
+    window.localStorage.setItem(GROQ_KEY_STORAGE, clean)
+  } catch {}
+}
 
 export function isGroqConfigured() {
-  return !!import.meta.env.VITE_GROQ_API_KEY
+  return !!getGroqApiKey()
 }
 
 function buildSchema(tables) {
@@ -42,6 +70,10 @@ REGLAS ESTRICTAS:
 - Responde SIEMPRE en español
 - Para consultar datos genera SQL DuckDB en bloques: \`\`\`sql ... \`\`\`
 - Usa SIEMPRE comillas dobles: SELECT "columna" FROM "tabla"
+- Si el usuario pide modificar datos/estructura, SI genera SQL de escritura (UPDATE, INSERT, DELETE, ALTER TABLE, CREATE TABLE AS)
+- Permite actualizar una tabla principal desde otra con JOIN, por ejemplo: UPDATE a SET ... FROM "otra_tabla" b WHERE ...
+- Permite agregar columnas calculadas con ALTER TABLE ... ADD COLUMN y luego UPDATE para poblarla
+- Si se pide insertar filas desde otro archivo usa INSERT INTO ... SELECT ... FROM "tabla_origen"
 - Después del SQL explica en 1-2 líneas qué hace y qué encontrará el usuario
 - Para cruzar tablas: usa LEFT JOIN, INNER JOIN, FULL OUTER JOIN según corresponda
 - Para duplicados: GROUP BY "col" HAVING COUNT(*) > 1
@@ -54,7 +86,7 @@ REGLAS ESTRICTAS:
 - Para UNION/consolidar múltiples tablas: usa UNION ALL con las mismas columnas`
 
 export async function askGroq(prompt, tables, history = []) {
-  const apiKey = import.meta.env.VITE_GROQ_API_KEY
+  const apiKey = getGroqApiKey()
   if (!apiKey) throw new Error('NO_API_KEY')
 
   const schema = buildSchema(tables)

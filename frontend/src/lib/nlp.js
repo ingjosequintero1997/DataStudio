@@ -5,22 +5,45 @@
 
 const MAX_JOIN_ROWS = 50000   // límite para evitar malloc OOM en DuckDB-Wasm
 const MAX_ROWS = 5000
+const NUMBER_WORDS = {
+  cero: '0', un: '1', uno: '1', una: '1', dos: '2', tres: '3', cuatro: '4', cinco: '5',
+  seis: '6', siete: '7', ocho: '8', nueve: '9', diez: '10', once: '11', doce: '12',
+}
 
 function normalize(text) {
   return text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim()
 }
-function findTable(text, tables) {
-  const n = normalize(text)
-  return (tables.find(t => normalize(t.name) === n) ||
-          tables.find(t => n.includes(normalize(t.name)) || normalize(t.name).includes(n)))?.name || null
+function replaceNumberWords(text) {
+  return normalize(text).replace(/\b(cero|un|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)\b/g, (match) => NUMBER_WORDS[match] || match)
 }
-function getBestTable(norm, tables) {
-  return tables.find(t => norm.includes(normalize(t.name))) || tables[0]
+function normalizeKey(text) {
+  return replaceNumberWords(text).replace(/[_\-.]+/g, ' ').replace(/\s+/g, ' ').trim()
+}
+function squashKey(text) {
+  return normalizeKey(text).replace(/\s+/g, '')
+}
+function findTable(text, tables) {
+  const key = normalizeKey(text)
+  const squashed = squashKey(text)
+  return (
+    tables.find(t => normalizeKey(t.name) === key) ||
+    tables.find(t => squashKey(t.name) === squashed) ||
+    tables.find(t => key.includes(normalizeKey(t.name)) || normalizeKey(t.name).includes(key)) ||
+    tables.find(t => squashed.includes(squashKey(t.name)) || squashKey(t.name).includes(squashed))
+  )?.name || null
+}
+function getBestTable(norm, tables, preferredTableName = null) {
+  const preferredTable = preferredTableName ? tables.find(t => t.name === preferredTableName) : null
+  const explicitlyMentioned = tables.find(t => norm.includes(normalizeKey(t.name)) || norm.includes(squashKey(t.name)))
+  return explicitlyMentioned || preferredTable || tables[0]
 }
 function findColumn(text, columns) {
-  const n = normalize(text)
-  return columns.find(c => normalize(c.name) === n) ||
-         columns.find(c => n.includes(normalize(c.name)) || normalize(c.name).includes(n)) || null
+  const key = normalizeKey(text)
+  const squashed = squashKey(text)
+  return columns.find(c => normalizeKey(c.name) === key) ||
+         columns.find(c => squashKey(c.name) === squashed) ||
+         columns.find(c => key.includes(normalizeKey(c.name)) || normalizeKey(c.name).includes(key)) ||
+         columns.find(c => squashed.includes(squashKey(c.name)) || squashKey(c.name).includes(squashed)) || null
 }
 function extractTwoTables(norm, tables) {
   for (const sep of [" con "," y "," mas "," + ",","," entre "]) {
@@ -34,7 +57,7 @@ function extractTwoTables(norm, tables) {
   const found = tables.filter(t => norm.includes(normalize(t.name)))
   return found.length >= 2 ? [found[0].name, found[1].name] : []
 }
-function extractNumber(norm) { const m = norm.match(/\b(\d+)\b/); return m ? parseInt(m[1]) : null }
+function extractNumber(norm) { const m = replaceNumberWords(norm).match(/\b(\d+)\b/); return m ? parseInt(m[1]) : null }
 function extractOrderedColumns(text) {
   const m = text.match(/(?:columnas|cols?)\s*:?\s*(.+)$/i)
   if (!m) return []
@@ -65,6 +88,23 @@ function detectOrder(norm) {
 function quoteVal(val, isNum) { return isNum && !isNaN(val) ? val : `'${val.replace(/'/g,"''")}'` }
 function isNumericType(type) {
   return ["INTEGER","BIGINT","DOUBLE","FLOAT","DECIMAL","NUMERIC","HUGEINT","UBIGINT","SMALLINT","TINYINT"].includes((type||"").toUpperCase())
+}
+
+function resolveRelativeColumns(norm, columns = []) {
+  if (!columns.length) return []
+  const count = Math.max(1, extractNumber(norm) || 1)
+  if (/(ultima|ultimas|ultimo|ultimos|final|finales)/.test(norm)) {
+    return columns.slice(-count).map(col => col.name)
+  }
+  if (/(primera|primeras|primero|primeros|inicio|iniciales)/.test(norm)) {
+    return columns.slice(0, count).map(col => col.name)
+  }
+  return []
+}
+
+export function shouldPreferLocalCommand(input = '') {
+  const norm = normalize(input)
+  return /(cruza|cruzar|join|relaciona|combina|enlaza|mezcla|consolida|une|unir|apila|actualiza|actualizar|cambia|cambiar|modifica|modificar|reemplaza|reemplazar|vaciar|limpiar columna|agrega.*columna|agregar.*columna|anade.*columna|anadir.*columna|nueva.*columna|elimina.*columna|quita.*columna|borra.*columna|renombra|renombrar|reordena|reordenar|mueve columnas|busca|buscar|filtra|filtrar|donde|cuantos|cuantas|cuenta|contar|promedio|media|suma|maximo|minimo|describe|estructura|duplicados|nulos|muestra|mostrar|ver|ordena|ordenar)/.test(norm)
 }
 
 const BASIC_STOPWORDS = new Set([
@@ -125,13 +165,13 @@ function buildJoinProjectionFromPairs(leftTable, rightTable, leftCols, rightCols
   return [statusProjection, ...leftProjection, ...rightProjection].join(',\n       ')
 }
 
-export function parseCommand(input, tables) {
+export function parseCommand(input, tables, options = {}) {
   if (!input?.trim()) return { error: "Escribe una consulta para comenzar." }
   if (!tables?.length) return { error: "No hay tablas cargadas. Primero carga un archivo." }
-  
   const rawInput = input.trim()
   const raw = rawInput.replace(/\[([^\]]+)\]/g, '$1').trim()
-  const norm = normalize(raw)
+  const norm = normalizeKey(raw)
+  const activeTableName = options?.activeTableName || null
 
   // ── SQL directo ──────────────────────────────────────────────────────────
   if (/^(select|insert|update|delete|alter|create|drop|with)\s/i.test(raw)) {
@@ -211,7 +251,7 @@ export function parseCommand(input, tables) {
 
   // ── ACTUALIZAR / UPDATE ───────────────────────────────────────────────────
   if (/(actualiza masivo|actualizacion masiva|actualizar masivamente|carga masiva|por lote|muchos datos)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const cols = table.columns || []
     const m = raw.match(/columna\s+(.+?)\s+(?:por|usando|segun|con clave)\s+(.+?)\s+(?:con|datos|mapeo)\s*:?\s*(.+)$/i)
     if (!m) {
@@ -243,7 +283,7 @@ export function parseCommand(input, tables) {
   }
 
   if (/(actualiza toda la columna|actualizar toda la columna|actualiza toda columna|reemplaza todos los datos de la columna|todos los datos de la columna)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const cols = table.columns || []
     const m = raw.match(/columna\s+(.+?)\s+(?:a|por|con)\s+["']?(.+?)["']?(?:\s+en\s+|\s+de\s+|$)/i)
     if (!m) return { error: `Especifica: Actualiza toda la columna [columna] a [valor] en ${table.name}` }
@@ -261,7 +301,7 @@ export function parseCommand(input, tables) {
   }
 
   if (/(actualiza|actualizar|cambia|cambiar|modifica|modificar|pon el valor|establece|set\s)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const cols = table.columns||[]
     // "Actualiza [tabla] pon/establece [col] = [val] donde [col2] sea [val2]"
     const setM = norm.match(/(?:pon|establece|set|cambia(?:r)?|actualiza(?:r)?)\s+(.+?)\s*(?:=|a|con el valor|con valor)\s*["']?([^"']+?)["']?(?:\s+(?:donde|where|if)\s+(.+))?$/)
@@ -292,7 +332,7 @@ export function parseCommand(input, tables) {
 
   // ── REEMPLAZAR VALORES EN COLUMNA ─────────────────────────────────────────
   if (/(reemplaza|reemplazar|sustituye|sustituir)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const cols = table.columns || []
     const p1 = norm.match(/(?:en|de)\s+(.+?)\s+(?:el valor|valor)?\s*["']?(.+?)["']?\s+(?:por|a)\s*["']?(.+?)["']?$/)
     const p2 = norm.match(/(?:columna)\s+(.+?)\s+(?:de|en)\s+[a-z0-9_\s]+\s+(?:de|desde)\s*["']?(.+?)["']?\s+(?:a|por)\s*["']?(.+?)["']?$/)
@@ -310,7 +350,7 @@ export function parseCommand(input, tables) {
 
   // ── VACIAR / LIMPIAR COLUMNA COMPLETA ─────────────────────────────────────
   if (/(vaciar columna|limpiar columna|poner nulo|dejar en blanco la columna|borrar datos de la columna)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const col = findColumn(norm, table.columns || [])
     if (!col) return { error: `Indica la columna a vaciar en "${table.name}".` }
     const sql = `UPDATE "${table.name}"\nSET "${col.name}" = NULL;`
@@ -319,7 +359,7 @@ export function parseCommand(input, tables) {
 
   // ── REORDENAR COLUMNAS ─────────────────────────────────────────────────────
   if (/(reordena|reordenar|mueve columnas|cambia posicion de columnas|orden de columnas)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const orderedRaw = extractOrderedColumns(input)
     const orderedColumns = orderedRaw
       .map(name => findColumn(name, table.columns || [])?.name)
@@ -337,7 +377,7 @@ export function parseCommand(input, tables) {
 
   // ── ELIMINAR REGISTROS / DELETE ───────────────────────────────────────────
   if (/(elimina.*registro|eliminar.*registro|borra.*registro|borrar.*registro|delete.*where|quita.*donde|elimina.*donde)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const cols = table.columns||[]
     const whereM = norm.match(/(?:donde|where|que|con)\s+(.+?)\s+(?:sea igual a|igual a|sea|=|es)\s+["']?([^"'\n]+?)["']?$/)
     if (whereM) {
@@ -354,7 +394,7 @@ export function parseCommand(input, tables) {
 
   // ── AGREGAR COLUMNA / ALTER TABLE ADD ─────────────────────────────────────
   if (/(agrega.*columna|agregar.*columna|añade.*columna|añadir.*columna|nueva.*columna|add.*column)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const m = norm.match(/(?:columna|campo|campo llamado|columna llamada)\s+["']?([a-z0-9_\s]+?)["']?(?:\s+(?:de tipo|tipo|como)\s+(\w+))?(?:\s+(?:con valor|con default)\s+(.+))?$/)
     if (m) {
       const colName = m[1].trim().replace(/\s+/g,"_")
@@ -370,18 +410,26 @@ export function parseCommand(input, tables) {
 
   // ── ELIMINAR COLUMNA / ALTER TABLE DROP ───────────────────────────────────
   if (/(elimina.*columna|quita.*columna|borra.*columna|drop.*columna|remove.*columna|elimina.*campo|quita.*campo)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const cols = table.columns||[]
-    const cleanNorm = norm.replace(/(elimina|quita|borra|drop|remove|columna|campo)/g,"")
-    const col = findColumn(cleanNorm, cols)
-    if (!col) return { error:`No encontré esa columna en "${table.name}". Columnas: ${cols.map(c=>`"${c.name}"`).join(", ")}` }
-    const sql = `ALTER TABLE "${table.name}" DROP COLUMN "${col.name}";`
-    return { sql, action:"query", description:`Eliminar columna "${col.name}" de "${table.name}"`, isDML:true, targetTable: table.name }
+    const cleanNorm = norm.replace(/(elimina|quita|borra|drop|remove|columna|columnas|campo|campos|la|las)/g,"")
+    const relativeColumns = resolveRelativeColumns(norm, cols)
+    const explicitColumn = findColumn(cleanNorm, cols)
+    const columnNames = explicitColumn ? [explicitColumn.name] : relativeColumns
+    if (!columnNames.length) return { error:`No encontré esa columna en "${table.name}". Columnas: ${cols.map(c=>`"${c.name}"`).join(", ")}` }
+    if (cols.length - columnNames.length < 1) {
+      return { error:`No puedo eliminar ${columnNames.length > 1 ? 'esas columnas' : 'esa columna'} porque "${table.name}" debe conservar al menos una columna.` }
+    }
+    if (columnNames.length > 1) {
+      return { action:"dropColumns", tableName: table.name, columnNames, description:`Eliminar ${columnNames.length} columnas de "${table.name}"`, isDML:true, targetTable: table.name }
+    }
+    const sql = `ALTER TABLE "${table.name}" DROP COLUMN "${columnNames[0]}";`
+    return { sql, action:"query", description:`Eliminar columna "${columnNames[0]}" de "${table.name}"`, isDML:true, targetTable: table.name }
   }
 
   // ── RENOMBRAR COLUMNA ────────────────────────────────────────────────────
   if (/(renombra|renombrar|cambia.*nombre|rename.*column)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const cols = table.columns||[]
     const m = norm.match(/(?:columna|campo)?\s*["']?(.+?)["']?\s+(?:a|como|por)\s+["']?(.+?)["']?$/)
     if (m) {
@@ -397,7 +445,7 @@ export function parseCommand(input, tables) {
 
   // ── ÚLTIMO REGISTRO ───────────────────────────────────────────────────────
   if (/(ultimo|ultima|last|mas.*reciente|registro.*final|el.*ultimo)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const cols = table.columns||[]
     const n = extractNumber(norm)||1
     const order = detectOrder(norm)||"DESC"
@@ -410,14 +458,14 @@ export function parseCommand(input, tables) {
 
   // ── PRIMEROS / TOP ────────────────────────────────────────────────────────
   if (/(primer|primeros|primeras|top|head)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const n = extractNumber(norm)||10
     return { sql:`SELECT *\nFROM "${table.name}"\nLIMIT ${n};`, action:"query", description:`Primeros ${n} registros de "${table.name}"` }
   }
 
   // ── ESTADÍSTICAS ─────────────────────────────────────────────────────────
   if (/(estadistica|stats|resumen.*estadistico|summarize|perfil|data.*profile)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     return { sql:`SUMMARIZE "${table.name}";`, action:"query", description:`Perfil estadístico de "${table.name}"` }
   }
 
@@ -453,7 +501,7 @@ export function parseCommand(input, tables) {
 
   // ── CONTAR ────────────────────────────────────────────────────────────────
   if (/(cuantos|cuantas|cuenta|contar|total.*registros|count\b|numero.*registros)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+      const table = getBestTable(norm, tables, activeTableName)
     const cols = table.columns||[]
     if (/(unicos|unicas|distinct|diferentes|distintos)/.test(norm)) {
       const col = findColumn(norm.replace(/(unicos|unicas|distinct|diferentes|distintos|cuantos|cuenta)/g,""), cols)
@@ -464,14 +512,14 @@ export function parseCommand(input, tables) {
 
   // ── DISTINCT / VALORES ÚNICOS ─────────────────────────────────────────────
   if (/(unicos|unicas|distinct|diferentes|distintos|valores.*de|lista.*de)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const col = findColumn(norm.replace(/(unicos|unicas|distinct|diferentes|distintos|valores|lista)/g,""), table.columns||[])
     if (col) return { sql:`SELECT DISTINCT "${col.name}"\nFROM "${table.name}"\nORDER BY "${col.name}";`, action:"query", description:`Valores únicos de "${col.name}"` }
   }
 
   // ── ORDENAR ───────────────────────────────────────────────────────────────
   if (/(ordena|ordenar|orden|sort|clasifica)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const order = detectOrder(norm)||"ASC"
     const col = findColumn(norm.replace(/(ordena|ordenar|sort|clasifica|mayor.*menor|menor.*mayor|desc|asc)/g,""), table.columns||[])
     const n = extractNumber(norm)||MAX_ROWS
@@ -480,7 +528,7 @@ export function parseCommand(input, tables) {
 
   // ── FILTRAR ───────────────────────────────────────────────────────────────
   if (/(busca|buscar|filtra|filtrar|donde|where|que.*sea|que.*tenga|que.*contenga|contiene|que.*diga)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const cols = table.columns||[]
     const patterns = [
       { re:/(?:donde|where|que|con)\s+(.+?)\s+(?:sea igual a|igual a|sea|=)\s+["']?([^"'\n]+?)["']?$/, op:"=" },
@@ -524,7 +572,7 @@ export function parseCommand(input, tables) {
 
   // ── ENTRE (BETWEEN) ───────────────────────────────────────────────────────
   if (/(entre|between|rango|desde.*hasta)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const m = norm.match(/(.+?)\s+(?:entre|between|en el rango|de)\s+([\d.]+)\s+(?:y|and|a|hasta)\s+([\d.]+)/)
     if (m) {
       const col = findColumn(m[1], table.columns||[])
@@ -534,14 +582,14 @@ export function parseCommand(input, tables) {
 
   // ── AGRUPAR ───────────────────────────────────────────────────────────────
   if (/(agrupa|agrupar|group.*by|por.*grupo|cuenta.*por|total.*por)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const col = findColumn(norm.replace(/(agrupa|agrupar|group|cuenta.*por|total.*por)/g,""), table.columns||[])
     if (col) return { sql:`SELECT "${col.name}", COUNT(*) AS total\nFROM "${table.name}"\nGROUP BY "${col.name}"\nORDER BY total DESC;`, action:"query", description:`Agrupación por "${col.name}"` }
   }
 
   // ── DUPLICADOS ────────────────────────────────────────────────────────────
   if (/(duplicados|duplicadas|repetidos|repetidas)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const col = findColumn(norm.replace(/(duplicados|duplicadas|repetidos|repetidas)/g,""), table.columns||[])
     if (col) return { sql:`SELECT "${col.name}", COUNT(*) AS apariciones\nFROM "${table.name}"\nGROUP BY "${col.name}"\nHAVING COUNT(*) > 1\nORDER BY apariciones DESC;`, action:"query", description:`Duplicados en "${col.name}"` }
     const allCols = (table.columns||[]).map(c=>`"${c.name}"`).join(", ")
@@ -550,7 +598,7 @@ export function parseCommand(input, tables) {
 
   // ── NULOS ─────────────────────────────────────────────────────────────────
   if (/(nulos|vacios|null|sin datos|faltantes)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const col = findColumn(norm.replace(/(nulos|vacios|null|sin datos|faltantes)/g,""), table.columns||[])
     if (col) return { sql:`SELECT *\nFROM "${table.name}"\nWHERE "${col.name}" IS NULL\nLIMIT 1000;`, action:"query", description:`Nulos en "${col.name}"` }
     const exprs = (table.columns||[]).map(c=>`COUNT(*) FILTER (WHERE "${c.name}" IS NULL) AS "${c.name}_nulos"`).join(",\n       ")
@@ -576,7 +624,7 @@ export function parseCommand(input, tables) {
 
   // ── MUESTRA / VER ────────────────────────────────────────────────────────
   if (/(muestra|ver|mostrar|selecciona|trae|dame|visualiza|todo.*de|todos.*de)/.test(norm)) {
-    const table = getBestTable(norm, tables)
+    const table = getBestTable(norm, tables, activeTableName)
     const n = extractNumber(norm)||MAX_ROWS
     const order = detectOrder(norm)
     const col = order ? findColumn(norm.replace(/(muestra|ver|mostrar|trae|dame|todo|todos)/g,""), table.columns||[]) : null
@@ -587,13 +635,13 @@ export function parseCommand(input, tables) {
   }
 
   // ── Fallback: tabla mencionada ────────────────────────────────────────────
-  const matchedTable = tables.find(t => norm.includes(normalize(t.name)))
+  const matchedTable = tables.find(t => norm.includes(normalizeKey(t.name)) || norm.includes(squashKey(t.name)))
   if (matchedTable) {
     return { sql:`SELECT *\nFROM "${matchedTable.name}"\nLIMIT ${MAX_ROWS};`, action:"query", description:`Mostrando "${matchedTable.name}"` }
   }
 
   // ── Ultra fallback: lenguaje básico / ambiguo ─────────────────────────────
-  const primary = tables[0]
+  const primary = getBestTable(norm, tables, activeTableName)
   if (primary) {
     if (/(que\s+hay|que\s+tengo|muestrame\s+algo|ver\s+algo|empecemos|comienza|arranca|listo\??|ok\b)/.test(norm)) {
       return {
@@ -611,7 +659,7 @@ export function parseCommand(input, tables) {
       }
     }
 
-    const inferredFilter = inferImplicitFilter(raw, norm, getBestTable(norm, tables))
+    const inferredFilter = inferImplicitFilter(raw, norm, getBestTable(norm, tables, activeTableName))
     if (inferredFilter) return inferredFilter
 
     // Mensajes super cortos: priorizar ayudar, no bloquear

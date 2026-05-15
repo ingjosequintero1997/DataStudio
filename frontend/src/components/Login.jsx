@@ -5,6 +5,7 @@ import { auth } from '../firebase'
 import { ADMIN_EMAIL } from '../lib/knowledgeBase'
 
 const spring = { type: 'spring', stiffness: 420, damping: 30 }
+const E = '#10B981'
 const AUTH_ERRORS = {
   'auth/invalid-credential': 'Correo o contraseña incorrectos.',
   'auth/user-not-found': 'No existe una cuenta con ese correo.',
@@ -16,19 +17,19 @@ const AUTH_ERRORS = {
   'auth/network-request-failed': 'Sin conexión. Verifica tu internet.',
 }
 
-function InputField({ label, type, value, onChange, placeholder, icon, autoComplete, rightSlot }) {
+function InputField({ label, type, value, onChange, placeholder, icon, autoComplete, rightSlot, isDark }) {
   const [focused, setFocused] = useState(false)
   return (
     <div>
-      <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, marginBottom: 5, color: '#4A6B4A', textTransform: 'uppercase', letterSpacing: '0.07em', fontFamily: 'Inter, sans-serif' }}>
+      <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 700, marginBottom: 6, color: focused ? E : 'rgba(16,185,129,0.5)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'Inter, sans-serif', transition: 'color 0.15s' }}>
         {label}
       </label>
       <motion.div
-        animate={{ boxShadow: focused ? '0 0 0 2px rgba(67,160,71,0.5)' : '0 0 0 1px #C8DCC8' }}
+        animate={{ boxShadow: focused ? `0 0 0 1.5px ${E}, 0 0 16px rgba(16,185,129,0.2)` : '0 0 0 1px rgba(16,185,129,0.15)' }}
         transition={{ duration: 0.15 }}
-        style={{ borderRadius: 10, overflow: 'hidden', position: 'relative' }}
+        style={{ borderRadius: 10, overflow: 'hidden', position: 'relative', background: focused ? 'rgba(16,185,129,0.06)' : 'rgba(255,255,255,0.03)' }}
       >
-        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 14, display: 'flex', alignItems: 'center', pointerEvents: 'none', color: focused ? '#43A047' : '#9EBB9E', transition: 'color 0.15s' }}>
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: 14, display: 'flex', alignItems: 'center', pointerEvents: 'none', color: focused ? E : 'rgba(16,185,129,0.35)', transition: 'color 0.15s' }}>
           {icon}
         </div>
         <input
@@ -44,17 +45,16 @@ function InputField({ label, type, value, onChange, placeholder, icon, autoCompl
             width: '100%',
             paddingLeft: 40,
             paddingRight: rightSlot ? 44 : 14,
-            paddingTop: 11,
-            paddingBottom: 11,
-            background: focused ? '#F1FAF1' : '#F9FBF9',
+            paddingTop: 12,
+            paddingBottom: 12,
+            background: 'transparent',
             border: 'none',
             outline: 'none',
-            color: '#1B3318',
+            color: isDark ? '#E2F5E2' : '#1B3318',
             fontSize: '0.88rem',
             fontFamily: 'Inter, sans-serif',
             borderRadius: 10,
             boxSizing: 'border-box',
-            transition: 'background 0.15s',
           }}
         />
         {rightSlot && (
@@ -67,7 +67,7 @@ function InputField({ label, type, value, onChange, placeholder, icon, autoCompl
   )
 }
 
-export default function Login() {
+export default function Login({ theme = 'light', onToggleTheme }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [isRegister, setIsRegister] = useState(false)
@@ -75,6 +75,7 @@ export default function Login() {
   const [loading, setLoading] = useState(false)
   const [showPass, setShowPass] = useState(false)
   const [success, setSuccess] = useState(false)
+  const isDark = theme === 'dark'
   const normalizedEmail = email.toLowerCase().trim()
   const canRegister = normalizedEmail === ADMIN_EMAIL
 
@@ -107,8 +108,29 @@ export default function Login() {
     <div style={{
       position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center',
       minHeight: '100vh', overflow: 'hidden',
-      background: 'linear-gradient(135deg, #1B5E20 0%, #2E7D32 35%, #43A047 70%, #E8F5E9 100%)',
+      background: isDark
+        ? 'linear-gradient(135deg, #050B07 0%, #0B1B13 35%, #0E2419 70%, #07120C 100%)'
+        : 'linear-gradient(135deg, #1B5E20 0%, #2E7D32 35%, #43A047 70%, #E8F5E9 100%)',
     }}>
+      <button
+        onClick={onToggleTheme}
+        style={{
+          position: 'absolute',
+          top: 14,
+          right: 14,
+          zIndex: 20,
+          padding: '8px 12px',
+          borderRadius: 10,
+          border: isDark ? '1px solid rgba(16,185,129,0.35)' : '1px solid rgba(255,255,255,0.35)',
+          background: isDark ? 'rgba(16,185,129,0.14)' : 'rgba(255,255,255,0.2)',
+          color: 'white',
+          fontSize: '0.74rem',
+          fontWeight: 700,
+          cursor: 'pointer',
+          backdropFilter: 'blur(8px)',
+        }}>
+        {isDark ? 'Modo normal' : 'Modo oscuro'}
+      </button>
       <motion.div
         animate={{ scale: [1, 1.05, 1], opacity: [0.12, 0.2, 0.12] }}
         transition={{ duration: 7, repeat: Infinity, ease: 'easeInOut' }}
@@ -125,7 +147,7 @@ export default function Login() {
         transition={{ type: 'spring', stiffness: 280, damping: 26 }}
         style={{ position: 'relative', zIndex: 10, width: '100%', maxWidth: 420, margin: '0 16px' }}
       >
-        <div style={{ borderRadius: '20px 20px 0 0', background: '#2E7D32', padding: '28px 28px 24px', textAlign: 'center' }}>
+        <div style={{ borderRadius: '20px 20px 0 0', background: isDark ? '#07120C' : '#2E7D32', padding: '28px 28px 24px', textAlign: 'center', borderBottom: isDark ? '1px solid rgba(16,185,129,0.2)' : 'none' }}>
           <motion.div whileHover={{ scale: 1.08, rotate: 4 }} transition={spring}
             style={{ display: 'inline-flex', marginBottom: 14, cursor: 'default' }}>
             <div style={{ width: 64, height: 64, borderRadius: 18, background: 'rgba(255,255,255,0.15)', border: '2px solid rgba(255,255,255,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -134,14 +156,14 @@ export default function Login() {
               </svg>
             </div>
           </motion.div>
-          <h1 style={{ fontFamily: 'Inter, sans-serif', fontSize: '1.6rem', fontWeight: 700, color: '#fff', letterSpacing: '-0.03em', margin: '0 0 6px' }}>DataStudio</h1>
+          <h1 style={{ fontFamily: 'Inter, sans-serif', fontSize: '1.6rem', fontWeight: 700, color: '#fff', letterSpacing: '-0.03em', margin: '0 0 6px' }}>NERV</h1>
           <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.75rem', color: 'rgba(255,255,255,0.72)', margin: 0 }}>
             Analisis de datos · Motor SQL en navegador
           </p>
         </div>
 
-        <div style={{ background: '#fff', borderRadius: '0 0 20px 20px', padding: '28px', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
-          <div style={{ display: 'flex', borderRadius: 10, padding: 4, marginBottom: 24, background: '#F4F7F4', border: '1px solid #C8DCC8', gap: 4 }}>
+        <div style={{ background: isDark ? '#0D1511' : '#fff', borderRadius: '0 0 20px 20px', padding: '28px', boxShadow: '0 20px 60px rgba(0,0,0,0.2)', border: isDark ? '1px solid rgba(16,185,129,0.2)' : 'none' }}>
+          <div style={{ display: 'flex', borderRadius: 10, padding: 4, marginBottom: 24, background: isDark ? 'rgba(16,185,129,0.08)' : '#F4F7F4', border: isDark ? '1px solid rgba(16,185,129,0.2)' : '1px solid #C8DCC8', gap: 4 }}>
             {['Iniciar sesion', 'Registrarse'].map((label, i) => {
               const active = (i === 1) === isRegister
               const isRegisterTab = i === 1
@@ -152,7 +174,7 @@ export default function Login() {
                   whileTap={{ scale: 0.97 }} transition={spring}
                   style={{ flex: 1, padding: '7px 0', borderRadius: 8, border: 'none', fontFamily: 'Inter, sans-serif', fontSize: '0.78rem', fontWeight: 600, transition: 'all 0.18s',
                     background: active ? 'linear-gradient(135deg, #43A047, #2E7D32)' : 'transparent',
-                    color: active ? '#fff' : '#4A6B4A',
+                    color: active ? '#fff' : (isDark ? 'rgba(16,185,129,0.72)' : '#4A6B4A'),
                     boxShadow: active ? '0 2px 12px rgba(67,160,71,0.35)' : 'none',
                     opacity: disabled ? 0.5 : 1,
                     cursor: disabled ? 'not-allowed' : 'pointer',
@@ -164,7 +186,7 @@ export default function Login() {
           </div>
 
           {!canRegister && (
-            <p style={{ margin: '-12px 0 16px', fontFamily: 'Inter, sans-serif', fontSize: '0.72rem', color: '#6B7280' }}>
+            <p style={{ margin: '-12px 0 16px', fontFamily: 'Inter, sans-serif', fontSize: '0.72rem', color: isDark ? 'rgba(226,245,226,0.55)' : '#6B7280' }}>
               Registro deshabilitado para este correo. Solo {ADMIN_EMAIL} puede crear cuenta.
             </p>
           )}
@@ -172,14 +194,16 @@ export default function Login() {
           <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <InputField label="Correo electronico" type="email" value={email} onChange={e => setEmail(e.target.value)}
               placeholder="usuario@empresa.com" autoComplete="username"
+              isDark={isDark}
               icon={<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.6}><path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>}
             />
             <InputField label="Contrasena" type={showPass ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)}
               placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;" autoComplete={isRegister ? 'new-password' : 'current-password'}
+              isDark={isDark}
               icon={<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.6}><path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>}
               rightSlot={
                 <motion.button type="button" onClick={() => setShowPass(p => !p)} whileHover={{ scale: 1.12 }} whileTap={{ scale: 0.9 }} transition={spring}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9EBB9E', padding: 0, display: 'flex' }}>
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: isDark ? 'rgba(16,185,129,0.45)' : '#9EBB9E', padding: 0, display: 'flex' }}>
                   {showPass
                     ? <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.6}><path strokeLinecap="round" strokeLinejoin="round" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" /></svg>
                     : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.6}><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
@@ -232,11 +256,11 @@ export default function Login() {
               </AnimatePresence>
             </motion.button>
           </form>
-          <div style={{ textAlign: 'center', marginTop: 20, padding: '12px 0 2px', borderTop: '1px solid #E8F5E9' }}>
-            <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.75rem', color: '#4A6B4A', margin: 0 }}>
+          <div style={{ textAlign: 'center', marginTop: 20, padding: '12px 0 2px', borderTop: isDark ? '1px solid rgba(16,185,129,0.2)' : '1px solid #E8F5E9' }}>
+            <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.75rem', color: isDark ? 'rgba(226,245,226,0.6)' : '#4A6B4A', margin: 0 }}>
               Desarrollado por
             </p>
-            <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.82rem', fontWeight: 700, color: '#2E7D32', margin: '2px 0 0', letterSpacing: '0.01em' }}>
+            <p style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.82rem', fontWeight: 700, color: isDark ? '#10B981' : '#2E7D32', margin: '2px 0 0', letterSpacing: '0.01em' }}>
               Ing. Jos&eacute; Quintero
             </p>
           </div>

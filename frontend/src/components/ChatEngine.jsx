@@ -4,18 +4,65 @@
  */
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { executeQuery } from '../lib/duckdb'
+import { dropColumns, executeQuery, reorderTableColumns } from '../lib/duckdb'
 import { runAiTask, isAiRuntimeConfigured } from '../services/ai/aiOrchestratorClient'
-import { parseCommand } from '../lib/nlp'
+import { setGroqApiKey } from '../lib/groqAI'
+import { parseCommand, shouldPreferLocalCommand } from '../lib/nlp'
+import { buildAutocompleteContext } from '../lib/autocomplete'
 
-const G = {
-  dark:    '#1B5E20',
-  primary: '#43A047',
-  light:   '#E8F5E9',
-  border:  '#C8DCC8',
-  text:    '#1B3318',
-  text2:   '#4A6B4A',
-  dim:     '#9EBB9E',
+const CHAT_THEME = {
+  dark: {
+    bg: '#07130F',
+    panel: '#0C1E18',
+    panelSoft: '#10271F',
+    border: 'rgba(52,211,153,0.24)',
+    dark: '#14532D',
+    text: '#E6FFF3',
+    text2: '#A7DCC3',
+    dim: '#79B79A',
+    primary: '#22C55E',
+    accent: '#10B981',
+    bubbleUserA: '#16A34A',
+    bubbleUserB: '#047857',
+    bubbleAssistant: '#0F231C',
+  },
+  light: {
+    bg: '#F3F8F5',
+    panel: '#FFFFFF',
+    panelSoft: '#F0F7F3',
+    border: '#CDE1D4',
+    dark: '#1B5E20',
+    text: '#163728',
+    text2: '#4D6F5D',
+    dim: '#789886',
+    primary: '#2E7D32',
+    accent: '#15803D',
+    bubbleUserA: '#2E7D32',
+    bubbleUserB: '#166534',
+    bubbleAssistant: '#FFFFFF',
+  },
+}
+
+const G = CHAT_THEME.dark
+
+function isMutatingSql(sql = '') {
+  return /^(\s)*(update|insert|delete|alter|create|drop|truncate|merge|replace)\b/i.test(sql)
+}
+
+function extractTargetTable(sql = '', tables = []) {
+  const patterns = [
+    /\bupdate\s+"([^"]+)"/i,
+    /\binto\s+"([^"]+)"/i,
+    /\bfrom\s+"([^"]+)"/i,
+    /\btable\s+"([^"]+)"/i,
+  ]
+  for (const pattern of patterns) {
+    const m = sql.match(pattern)
+    if (m?.[1]) return m[1]
+  }
+  const lower = sql.toLowerCase()
+  const found = tables.find((t) => lower.includes(`"${t.name.toLowerCase()}"`) || lower.includes(` ${t.name.toLowerCase()} `))
+  return found?.name || null
 }
 
 function MiniTable({ result }) {
@@ -140,16 +187,16 @@ function SetupGuideCard() {
   )
 }
 
-function AssistantMessage({ msg, onExport, onExportExcel, onSuggest }) {
+function AssistantMessage({ msg, onExport, onExportExcel, onSuggest, palette, isDark }) {
   const [sqlOpen, setSqlOpen] = useState(false)
   return (
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ type: 'spring', stiffness: 340, damping: 28 }} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', maxWidth: '90%' }}>
-      <div style={{ width: 32, height: 32, borderRadius: 10, background: `linear-gradient(135deg, ${G.primary}, ${G.dark})`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2, fontSize: 15 }}>◈</div>
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ type: 'spring', stiffness: 340, damping: 28 }} style={{ display: 'flex', gap: 11, alignItems: 'flex-start', maxWidth: '92%' }}>
+      <div style={{ width: 34, height: 34, borderRadius: 11, background: `linear-gradient(145deg, ${palette.primary}, ${palette.accent})`, border: `1px solid ${palette.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2, fontSize: 15, color: '#fff', boxShadow: isDark ? '0 8px 20px rgba(16,185,129,0.2)' : '0 8px 16px rgba(0,0,0,0.08)' }}>◈</div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ background: '#fff', borderRadius: '4px 14px 14px 14px', padding: '12px 16px', border: `1px solid ${G.border}`, boxShadow: '0 2px 10px rgba(0,0,0,0.07)' }}>
+        <div style={{ background: palette.bubbleAssistant, borderRadius: '8px 18px 18px 18px', padding: '14px 18px', border: `1px solid ${palette.border}`, boxShadow: isDark ? '0 12px 28px rgba(0,0,0,0.32)' : '0 8px 24px rgba(0,0,0,0.08)' }}>
           {msg.isSetupGuide && <SetupGuideCard />}
           {msg.text && (
-            <p style={{ margin: 0, fontSize: '0.86rem', color: G.text, fontFamily: 'Inter,sans-serif', lineHeight: 1.7, whiteSpace: 'pre-wrap', marginBottom: (msg.sql || msg.result || msg.error || msg.briefing) ? 10 : 0 }}>
+            <p style={{ margin: 0, fontSize: '0.93rem', color: palette.text, fontFamily: 'Inter,sans-serif', lineHeight: 1.72, whiteSpace: 'pre-wrap', marginBottom: (msg.sql || msg.result || msg.error || msg.briefing) ? 10 : 0 }}>
               <RichText text={msg.text} />
             </p>
           )}
@@ -160,13 +207,13 @@ function AssistantMessage({ msg, onExport, onExportExcel, onSuggest }) {
           )}
           {msg.sql && (
             <div style={{ marginTop: 8 }}>
-              <button onClick={() => setSqlOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', color: G.dim, fontSize: '0.71rem', fontFamily: 'Inter,sans-serif', padding: 0 }}>
+              <button onClick={() => setSqlOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', color: palette.dim, fontSize: '0.73rem', fontFamily: 'Inter,sans-serif', padding: 0 }}>
                 <span style={{ display: 'inline-block', transform: sqlOpen ? 'rotate(90deg)' : 'none', transition: 'transform 0.18s', fontSize: 9 }}>▶</span>
                 {sqlOpen ? 'Ocultar SQL' : 'Ver SQL generado por IA'}
               </button>
               <AnimatePresence>
                 {sqlOpen && (
-                  <motion.pre initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} style={{ margin: '6px 0 0', background: '#F4F7F4', border: `1px solid ${G.border}`, borderRadius: 8, padding: '8px 12px', fontSize: '0.71rem', color: G.text2, fontFamily: 'JetBrains Mono, monospace', overflowX: 'auto', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
+                  <motion.pre initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} style={{ margin: '6px 0 0', background: isDark ? '#0A1713' : '#F4F7F4', border: `1px solid ${palette.border}`, borderRadius: 8, padding: '8px 12px', fontSize: '0.73rem', color: palette.text2, fontFamily: 'JetBrains Mono, monospace', overflowX: 'auto', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
                     {msg.sql}
                   </motion.pre>
                 )}
@@ -178,14 +225,14 @@ function AssistantMessage({ msg, onExport, onExportExcel, onSuggest }) {
             <>
               <MiniTable result={msg.result} />
               <div style={{ display: 'flex', gap: 7, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                <button onClick={() => onExport?.(msg.result)} style={{ padding: '4px 11px', borderRadius: 7, border: `1px solid ${G.border}`, background: '#fff', color: G.text2, fontSize: '0.7rem', fontFamily: 'Inter,sans-serif', cursor: 'pointer', fontWeight: 600 }}>⬇ CSV</button>
-                <button onClick={() => onExportExcel?.(msg.result)} style={{ padding: '4px 11px', borderRadius: 7, border: `1px solid ${G.border}`, background: '#fff', color: G.text2, fontSize: '0.7rem', fontFamily: 'Inter,sans-serif', cursor: 'pointer', fontWeight: 600 }}>⬇ Excel</button>
-                {msg.duration && <span style={{ fontSize: '0.66rem', color: G.dim, fontFamily: 'Inter,sans-serif' }}>⏱ {msg.duration}s</span>}
+                <button onClick={() => onExport?.(msg.result)} style={{ padding: '5px 12px', borderRadius: 8, border: `1px solid ${palette.border}`, background: isDark ? '#153227' : '#fff', color: palette.text2, fontSize: '0.72rem', fontFamily: 'Inter,sans-serif', cursor: 'pointer', fontWeight: 700 }}>⬇ CSV</button>
+                <button onClick={() => onExportExcel?.(msg.result)} style={{ padding: '5px 12px', borderRadius: 8, border: `1px solid ${palette.border}`, background: isDark ? '#153227' : '#fff', color: palette.text2, fontSize: '0.72rem', fontFamily: 'Inter,sans-serif', cursor: 'pointer', fontWeight: 700 }}>⬇ Excel</button>
+                {msg.duration && <span style={{ fontSize: '0.68rem', color: palette.dim, fontFamily: 'Inter,sans-serif' }}>⏱ {msg.duration}s</span>}
               </div>
             </>
           )}
         </div>
-        <div style={{ fontSize: '0.61rem', color: G.dim, marginTop: 4, marginLeft: 4, fontFamily: 'Inter,sans-serif' }}>
+        <div style={{ fontSize: '0.64rem', color: palette.dim, marginTop: 4, marginLeft: 4, fontFamily: 'Inter,sans-serif' }}>
           {msg.timestamp?.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })}
         </div>
       </div>
@@ -193,14 +240,14 @@ function AssistantMessage({ msg, onExport, onExportExcel, onSuggest }) {
   )
 }
 
-function UserMessage({ msg }) {
+function UserMessage({ msg, palette }) {
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ type: 'spring', stiffness: 340, damping: 28 }} style={{ display: 'flex', justifyContent: 'flex-end' }}>
-      <div style={{ maxWidth: '78%' }}>
-        <div style={{ background: `linear-gradient(135deg, ${G.primary}, ${G.dark})`, borderRadius: '14px 4px 14px 14px', padding: '10px 16px' }}>
-          <p style={{ margin: 0, fontSize: '0.86rem', fontFamily: 'Inter,sans-serif', lineHeight: 1.55, color: 'white', whiteSpace: 'pre-wrap' }}>{msg.text}</p>
+      <div style={{ maxWidth: '80%' }}>
+        <div style={{ background: `linear-gradient(145deg, ${palette.bubbleUserA}, ${palette.bubbleUserB})`, borderRadius: '18px 8px 18px 18px', padding: '12px 17px', boxShadow: '0 10px 22px rgba(0,0,0,0.22)' }}>
+          <p style={{ margin: 0, fontSize: '0.9rem', fontFamily: 'Inter,sans-serif', lineHeight: 1.58, color: 'white', whiteSpace: 'pre-wrap' }}>{msg.text}</p>
         </div>
-        <div style={{ fontSize: '0.61rem', color: G.dim, marginTop: 4, textAlign: 'right', marginRight: 4, fontFamily: 'Inter,sans-serif' }}>
+        <div style={{ fontSize: '0.64rem', color: palette.dim, marginTop: 4, textAlign: 'right', marginRight: 4, fontFamily: 'Inter,sans-serif' }}>
           {msg.timestamp?.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })}
         </div>
       </div>
@@ -208,14 +255,14 @@ function UserMessage({ msg }) {
   )
 }
 
-function TypingIndicator() {
+function TypingIndicator({ palette, isDark }) {
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-      <div style={{ width: 32, height: 32, borderRadius: 10, background: `linear-gradient(135deg, ${G.primary}, ${G.dark})`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 15 }}>◈</div>
-      <div style={{ background: '#fff', borderRadius: '4px 14px 14px 14px', padding: '14px 18px', border: `1px solid ${G.border}`, boxShadow: '0 2px 10px rgba(0,0,0,0.07)' }}>
+      <div style={{ width: 34, height: 34, borderRadius: 11, background: `linear-gradient(145deg, ${palette.primary}, ${palette.accent})`, border: `1px solid ${palette.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 15, color: '#fff' }}>◈</div>
+      <div style={{ background: palette.bubbleAssistant, borderRadius: '6px 16px 16px 16px', padding: '14px 18px', border: `1px solid ${palette.border}`, boxShadow: isDark ? '0 10px 22px rgba(0,0,0,0.28)' : '0 8px 20px rgba(0,0,0,0.08)' }}>
         <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
           {[0, 1, 2].map(i => (
-            <motion.div key={i} style={{ width: 7, height: 7, borderRadius: '50%', background: G.primary }} animate={{ y: [0, -7, 0] }} transition={{ duration: 0.55, delay: i * 0.14, repeat: Infinity }} />
+            <motion.div key={i} style={{ width: 7, height: 7, borderRadius: '50%', background: palette.primary }} animate={{ y: [0, -7, 0] }} transition={{ duration: 0.55, delay: i * 0.14, repeat: Infinity }} />
           ))}
         </div>
       </div>
@@ -223,14 +270,14 @@ function TypingIndicator() {
   )
 }
 
-function ActionBar({ tables, onOpenCrossWizard, onOpenDashboard, onOpenKnowledgeBase, onConsolidate, isThinking }) {
+function ActionBar({ tables, onOpenCrossWizard, onOpenDashboard, onConsolidate, isThinking, palette, isDark }) {
   if (!tables.length) return null
   const totalRows = tables.reduce((s, t) => s + (t.rowCount || 0), 0)
   return (
-    <div style={{ padding: '8px 16px', background: '#fff', borderBottom: `1px solid ${G.border}`, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 20, background: G.light, border: `1px solid ${G.border}`, marginRight: 4 }}>
+    <div style={{ padding: '11px 16px', background: isDark ? 'linear-gradient(180deg, #10251D, #0E2019)' : '#fff', borderBottom: `1px solid ${palette.border}`, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 11px', borderRadius: 20, background: isDark ? '#143024' : palette.panelSoft, border: `1px solid ${palette.border}`, marginRight: 4 }}>
         <span style={{ fontSize: 11 }}>📁</span>
-        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: G.dark, fontFamily: 'Inter,sans-serif' }}>
+        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: palette.text, fontFamily: 'Inter,sans-serif' }}>
           {tables.length} archivo{tables.length !== 1 ? 's' : ''} · {totalRows.toLocaleString()} filas
         </span>
       </div>
@@ -247,30 +294,26 @@ function ActionBar({ tables, onOpenCrossWizard, onOpenDashboard, onOpenKnowledge
         </motion.button>
       )}
       <motion.button whileHover={{ scale: 1.04, y: -1 }} whileTap={{ scale: 0.95 }} onClick={onOpenDashboard} disabled={isThinking}
-        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 13px', borderRadius: 8, border: 'none', background: `linear-gradient(135deg, ${G.dark}, #145A32)`, color: 'white', fontSize: '0.72rem', fontWeight: 700, fontFamily: 'Inter,sans-serif', cursor: 'pointer', boxShadow: '0 2px 8px rgba(27,94,32,0.3)', opacity: isThinking ? 0.5 : 1 }}>
+        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 13px', borderRadius: 8, border: 'none', background: `linear-gradient(135deg, ${palette.primary}, ${palette.accent})`, color: 'white', fontSize: '0.72rem', fontWeight: 700, fontFamily: 'Inter,sans-serif', cursor: 'pointer', boxShadow: '0 2px 8px rgba(27,94,32,0.3)', opacity: isThinking ? 0.5 : 1 }}>
         📊 Dashboard
-      </motion.button>
-      <motion.button whileHover={{ scale: 1.04, y: -1 }} whileTap={{ scale: 0.95 }} onClick={onOpenKnowledgeBase} disabled={isThinking}
-        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 13px', borderRadius: 8, border: `1px solid ${G.border}`, background: '#fff', color: G.dark, fontSize: '0.72rem', fontWeight: 700, fontFamily: 'Inter,sans-serif', cursor: 'pointer', opacity: isThinking ? 0.5 : 1 }}>
-        📚 Conocimiento
       </motion.button>
     </div>
   )
 }
 
-function EmptyState({ onOpenUploader }) {
+function EmptyState({ onOpenUploader, palette, isDark }) {
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px 24px', gap: 24 }}>
-      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: 'spring', stiffness: 300, damping: 25 }} style={{ width: 80, height: 80, borderRadius: 24, background: `linear-gradient(135deg, ${G.primary}, ${G.dark})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 36, boxShadow: '0 8px 32px rgba(67,160,71,0.35)' }}>
+      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: 'spring', stiffness: 300, damping: 25 }} style={{ width: 80, height: 80, borderRadius: 24, background: `linear-gradient(145deg, ${palette.primary}, ${palette.accent})`, border: `1px solid ${palette.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 36, color: '#fff', boxShadow: isDark ? '0 8px 32px rgba(16,185,129,0.25)' : '0 8px 24px rgba(0,0,0,0.12)' }}>
         ◈
       </motion.div>
       <div style={{ textAlign: 'center', maxWidth: 380 }}>
-        <h2 style={{ margin: '0 0 8px', fontSize: '1.25rem', fontWeight: 800, color: G.dark, fontFamily: 'Inter,sans-serif' }}>DataStudio AI</h2>
-        <p style={{ margin: '0 0 20px', fontSize: '0.88rem', color: G.text2, fontFamily: 'Inter,sans-serif', lineHeight: 1.7 }}>
+        <h2 style={{ margin: '0 0 8px', fontSize: '1.32rem', fontWeight: 800, color: palette.text, fontFamily: 'Inter,sans-serif' }}>NERV</h2>
+        <p style={{ margin: '0 0 20px', fontSize: '0.9rem', color: palette.text2, fontFamily: 'Inter,sans-serif', lineHeight: 1.7 }}>
           Carga cualquier archivo CSV o Excel y conversa con tus datos en lenguaje natural. La IA genera SQL automaticamente.
         </p>
         <motion.button whileHover={{ scale: 1.04, y: -2 }} whileTap={{ scale: 0.95 }} onClick={onOpenUploader}
-          style={{ padding: '10px 24px', borderRadius: 12, border: 'none', background: `linear-gradient(135deg, ${G.primary}, ${G.dark})`, color: 'white', fontSize: '0.88rem', fontWeight: 700, fontFamily: 'Inter,sans-serif', cursor: 'pointer', boxShadow: '0 4px 16px rgba(67,160,71,0.4)' }}>
+          style={{ padding: '10px 24px', borderRadius: 12, border: 'none', background: `linear-gradient(145deg, ${palette.primary}, ${palette.accent})`, color: 'white', fontSize: '0.9rem', fontWeight: 700, fontFamily: 'Inter,sans-serif', cursor: 'pointer', boxShadow: isDark ? '0 4px 18px rgba(16,185,129,0.35)' : '0 4px 14px rgba(0,0,0,0.14)' }}>
           + Cargar primer archivo
         </motion.button>
       </div>
@@ -281,10 +324,10 @@ function EmptyState({ onOpenUploader }) {
           { icon: '📊', title: 'Dashboard', desc: 'Graficas y metricas automaticas' },
           { icon: '🩺', title: 'Diagnostico', desc: 'Detecta nulos, duplicados y anomalias' },
         ].map((item, i) => (
-          <motion.div key={i} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }} style={{ padding: '12px 14px', borderRadius: 12, border: `1px solid ${G.border}`, background: '#fff' }}>
+          <motion.div key={i} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }} style={{ padding: '12px 14px', borderRadius: 12, border: `1px solid ${palette.border}`, background: isDark ? '#0F251D' : '#fff' }}>
             <div style={{ fontSize: 20, marginBottom: 6 }}>{item.icon}</div>
-            <div style={{ fontSize: '0.75rem', fontWeight: 700, color: G.dark, fontFamily: 'Inter,sans-serif', marginBottom: 3 }}>{item.title}</div>
-            <div style={{ fontSize: '0.68rem', color: G.text2, fontFamily: 'Inter,sans-serif', lineHeight: 1.5, fontStyle: 'italic' }}>{item.desc}</div>
+            <div style={{ fontSize: '0.75rem', fontWeight: 700, color: palette.text, fontFamily: 'Inter,sans-serif', marginBottom: 3 }}>{item.title}</div>
+            <div style={{ fontSize: '0.68rem', color: palette.text2, fontFamily: 'Inter,sans-serif', lineHeight: 1.5, fontStyle: 'italic' }}>{item.desc}</div>
           </motion.div>
         ))}
       </div>
@@ -295,29 +338,38 @@ function EmptyState({ onOpenUploader }) {
 const WELCOME = {
   id: 'welcome',
   role: 'assistant',
-  text: 'Hola! Soy tu analista de datos con IA.\n\nCarga un archivo CSV o Excel y preguntame lo que quieras:\n• "Cuantos registros hay con estado Inactivo?"\n• "Muestra el top 10 por valor de contrato"\n• "Busca duplicados en cedula"\n• "Cruza el archivo A con B y muestra los que no coinciden"',
+  text: 'Listo para ayudarte con los datos cargados.',
   sql: null, result: null, error: null,
   timestamp: new Date(),
 }
 
 let _msgId = 200
-const AI_AVAILABLE = isAiRuntimeConfigured()
 
 export default function ChatEngine({
   tables,
+  activeTableName = null,
   onExport,
   onExportExcel,
+  onResult,
   addToast,
   onOpenCrossWizard,
   onOpenDashboard,
-  onOpenKnowledgeBase,
   onOpenUploader,
+  showActionBar = true,
+  theme = 'light',
 }) {
+  const isDark = theme === 'dark'
+  const palette = CHAT_THEME[theme] || CHAT_THEME.light
   const [messages, setMessages] = useState([WELCOME])
   const [input, setInput] = useState('')
   const [isThinking, setIsThinking] = useState(false)
+  const [aiAvailable, setAiAvailable] = useState(() => isAiRuntimeConfigured())
+  const [forceLocalMode, setForceLocalMode] = useState(false)
   const [conversationHistory, setConversationHistory] = useState([])
   const [prevTableCount, setPrevTableCount] = useState(0)
+  const [cursorPosition, setCursorPosition] = useState(0)
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(0)
   const bottomRef = useRef(null)
   const textareaRef = useRef(null)
 
@@ -332,6 +384,25 @@ export default function ChatEngine({
     el.style.height = Math.min(el.scrollHeight, 140) + 'px'
   }, [input])
 
+  const autocompleteContext = useMemo(
+    () => buildAutocompleteContext(input, cursorPosition, tables, activeTableName),
+    [activeTableName, cursorPosition, input, tables]
+  )
+
+  const visibleSuggestions = autocompleteContext?.items || []
+
+  useEffect(() => {
+    setSelectedSuggestionIndex(0)
+  }, [input, cursorPosition, activeTableName])
+
+  useEffect(() => {
+    setAiAvailable(isAiRuntimeConfigured())
+  }, [])
+
+  const configureGroqRuntime = useCallback(() => {
+    addToast?.('IA no disponible temporalmente. Contacta al administrador del despliegue.', 'warning', 'Runtime IA')
+  }, [addToast])
+
   const addMsg = useCallback((msg) => {
     setMessages(prev => [...prev, { id: `msg-${++_msgId}`, timestamp: new Date(), ...msg }])
   }, [])
@@ -340,60 +411,111 @@ export default function ChatEngine({
     if (tables.length <= prevTableCount) { setPrevTableCount(tables.length); return }
     const newTable = tables[tables.length - 1]
     setPrevTableCount(tables.length)
-
-    async function runBriefing() {
-      setIsThinking(true)
-      try {
-        const cols = newTable.columns || []
-        const rowCount = newTable.rowCount || 0
-        const items = []
-
-        if (cols.length > 0) {
-          const nullExpr = cols.map(c => `COUNT(*) FILTER (WHERE "${c.name}" IS NULL) AS "${c.name}"`).join(', ')
-          const nullRow = (await executeQuery(`SELECT ${nullExpr} FROM "${newTable.name}"`))?.rows?.[0] || {}
-          const criticals = []
-          const warnings = []
-          Object.entries(nullRow).forEach(([col, count]) => {
-            const pct = rowCount > 0 ? (Number(count) / rowCount) * 100 : 0
-            if (pct > 50) criticals.push(`${col} (${pct.toFixed(1)}% vacios)`)
-            else if (pct > 10) warnings.push(`${col} (${pct.toFixed(1)}%)`)
-          })
-          if (criticals.length > 0) items.push({ severity: 'critical', text: `Alta tasa de vacios en: ${criticals.join(', ')}` })
-          if (warnings.length > 0) items.push({ severity: 'warning', text: `Vacios parciales en: ${warnings.join(', ')}` })
-          const cleanCount = cols.filter(c => !Number(nullRow[c.name])).length
-          if (criticals.length === 0 && warnings.length === 0) items.push({ severity: 'ok', text: `Datos limpios. ${cleanCount} columna(s) sin vacios.` })
-          else if (cleanCount > 0) items.push({ severity: 'ok', text: `${cleanCount} columna(s) completamente limpias.` })
-        }
-
-        const keyCol = cols.find(c => /id|ium|c[ou]d|clave|cedula|nit|serial|ref|folio|cuenta/i.test(c.name))
-        if (keyCol && rowCount > 0) {
-          try {
-            const dupRes = await executeQuery(`SELECT COUNT(*) - COUNT(DISTINCT TRIM(CAST("${keyCol.name}" AS VARCHAR))) AS dups FROM "${newTable.name}"`)
-            const dups = Number(dupRes?.rows?.[0]?.dups || 0)
-            if (dups > 0) items.push({ severity: 'warning', text: `${dups.toLocaleString()} duplicado(s) en "${keyCol.name}".` })
-          } catch { }
-        }
-
-        const sugs = []
-        if (keyCol) sugs.push(`Hay duplicados en ${keyCol.name}?`)
-        sugs.push(`Muestra los primeros 10 registros de ${newTable.name}`)
-        sugs.push(`Cuantos registros tiene ${newTable.name}?`)
-        if (tables.length >= 2) sugs.push(`Cruza ${newTable.name} con ${tables[tables.length - 2]?.name}`)
-
-        addMsg({
-          role: 'assistant',
-          text: `Analice "${newTable.name}" (${rowCount.toLocaleString()} filas · ${cols.length} columnas). Diagnostico automatico:`,
-          sql: null, result: null, error: null,
-          briefing: { tableName: newTable.name, rowCount, colCount: cols.length, items, suggestions: sugs.slice(0, 4) },
-        })
-      } catch {
-        addMsg({ role: 'assistant', text: `Listo! Cargue "${newTable.name}" (${(newTable.rowCount || 0).toLocaleString()} filas). Que quieres analizar?`, sql: null, result: null, error: null })
-      } finally {
-        setIsThinking(false)
-      }
-    }
-    runBriefing()
+    addMsg({ role: 'assistant', text: `Archivo cargado: ${newTable.name}.`, sql: null, result: null, error: null })
   }, [tables]) // eslint-disable-line
+
+  const applySuggestion = useCallback((suggestion) => {
+    if (!suggestion || !autocompleteContext) return
+
+    const suffixOffset = autocompleteContext.type === 'bracket' && input[autocompleteContext.end] === ']' ? 1 : 0
+    const nextValue =
+      input.slice(0, autocompleteContext.start) +
+      suggestion.insertText +
+      input.slice(autocompleteContext.end + suffixOffset)
+
+    setInput(nextValue)
+    setShowSuggestions(false)
+
+    requestAnimationFrame(() => {
+      const nextCaret = autocompleteContext.start + suggestion.insertText.length
+      textareaRef.current?.focus()
+      textareaRef.current?.setSelectionRange(nextCaret, nextCaret)
+      setCursorPosition(nextCaret)
+    })
+  }, [autocompleteContext, input])
+
+  const executeLocalCommand = useCallback(async (text) => {
+    const parsed = parseCommand(text, tables, { activeTableName })
+
+    if (parsed?.action === 'help') {
+      addMsg({
+        role: 'assistant',
+        text: 'Prueba instrucciones como: "muestra 20 registros", "filtra donde ciudad sea Bogota", "cruza ventas con clientes por id", "reemplaza inactivo por activo en estado".',
+        sql: null,
+        result: null,
+        error: null,
+      })
+      return { handled: true, parsed }
+    }
+
+    if (parsed?.action === 'export') {
+      addMsg({
+        role: 'assistant',
+        text: 'Usa los botones de exportacion del modulo de resultados para descargar CSV o Excel del resultado actual.',
+        sql: null,
+        result: null,
+        error: null,
+      })
+      return { handled: true, parsed }
+    }
+
+    if (parsed?.action === 'reorderColumns') {
+      await reorderTableColumns(parsed.tableName, parsed.orderedColumns || [])
+      const preview = await executeQuery(`SELECT * FROM "${parsed.tableName}" LIMIT 200;`)
+      onResult?.({
+        result: preview,
+        prompt: text,
+        sql: null,
+        targetTable: parsed.tableName,
+        source: 'chat',
+      })
+      addMsg({ role: 'assistant', text: `Listo. ${parsed.description || 'Reordene las columnas'}.`, sql: null, result: preview, error: null })
+      return { handled: true, parsed }
+    }
+
+    if (parsed?.action === 'dropColumns') {
+      await dropColumns(parsed.tableName, parsed.columnNames || [])
+      const preview = await executeQuery(`SELECT * FROM "${parsed.tableName}" LIMIT 200;`)
+      onResult?.({
+        result: preview,
+        prompt: text,
+        sql: null,
+        targetTable: parsed.tableName,
+        source: 'chat',
+      })
+      addMsg({ role: 'assistant', text: `Listo. ${parsed.description || 'Elimine columnas'}.`, sql: null, result: preview, error: null })
+      return { handled: true, parsed }
+    }
+
+    if (parsed?.sql && !parsed?.error) {
+      const start = performance.now()
+      let result = await executeQuery(parsed.sql)
+      if (isMutatingSql(parsed.sql)) {
+        const target = parsed.targetTable || extractTargetTable(parsed.sql, tables)
+        if (target) {
+          result = await executeQuery(`SELECT * FROM "${target}" LIMIT 200;`)
+        }
+      }
+      const duration = ((performance.now() - start) / 1000).toFixed(3)
+      const finalResult = { ...result, duration }
+      onResult?.({
+        result: finalResult,
+        prompt: text,
+        sql: parsed.sql,
+        targetTable: parsed.targetTable || extractTargetTable(parsed.sql, tables),
+        source: 'chat',
+      })
+      addMsg({ role: 'assistant', text: parsed.description || '(Modo local)', sql: parsed.sql, result: finalResult, error: null })
+      return { handled: true, parsed }
+    }
+
+    if (parsed?.error) {
+      addMsg({ role: 'assistant', text: null, sql: null, result: null, error: parsed.error })
+      return { handled: true, parsed }
+    }
+
+    return { handled: false, parsed }
+  }, [activeTableName, addMsg, onResult, tables])
 
   const handleSend = useCallback(async (text = input.trim()) => {
     if (!text || isThinking) return
@@ -407,18 +529,24 @@ export default function ChatEngine({
         return
       }
 
-      if (!AI_AVAILABLE) {
-        addMsg({ role: 'assistant', text: 'La IA no esta configurada aun. Aqui tienes como activarla gratis:', sql: null, result: null, error: null, isSetupGuide: true })
+      const runtimeReady = !forceLocalMode && isAiRuntimeConfigured()
+      setAiAvailable(runtimeReady)
+
+      const preferLocal = shouldPreferLocalCommand(text)
+
+      if (!runtimeReady || preferLocal) {
         try {
-          const parsed = parseCommand(text, tables)
-          if (parsed?.sql && !parsed?.error) {
-            const start = performance.now()
-            const result = await executeQuery(parsed.sql)
-            const duration = ((performance.now() - start) / 1000).toFixed(3)
-            addMsg({ role: 'assistant', text: `(Modo local sin IA) ${parsed.description || ''}`, sql: parsed.sql, result: { ...result, duration }, error: null })
+          const localResult = await executeLocalCommand(text)
+          if (localResult.handled || !runtimeReady) {
+            if (!localResult.handled && !runtimeReady) {
+              addMsg({ role: 'assistant', text: 'No pude interpretar esa instruccion en modo local. Si quieres consultas libres en lenguaje natural, activa IA en configuracion.', sql: null, result: null, error: null })
+            }
+            return
           }
-        } catch { }
-        return
+        } catch {
+          addMsg({ role: 'assistant', text: 'No pude interpretar esa instruccion en modo local. Si quieres consultas libres en lenguaje natural, activa IA en configuracion.', sql: null, result: null, error: null })
+          return
+        }
       }
 
       const { sql: aiSql, explanation: aiExplanation } = await runAiTask({
@@ -436,6 +564,12 @@ export default function ChatEngine({
         try {
           const start = performance.now()
           result = await executeQuery(aiSql)
+          if (isMutatingSql(aiSql)) {
+            const target = extractTargetTable(aiSql, tables)
+            if (target) {
+              result = await executeQuery(`SELECT * FROM "${target}" LIMIT 200;`)
+            }
+          }
           result = { ...result, duration: ((performance.now() - start) / 1000).toFixed(3) }
         } catch (sqlErr) {
           try {
@@ -458,6 +592,12 @@ export default function ChatEngine({
             if (retry.sql) {
               const start = performance.now()
               result = await executeQuery(retry.sql)
+              if (isMutatingSql(retry.sql)) {
+                const target = extractTargetTable(retry.sql, tables)
+                if (target) {
+                  result = await executeQuery(`SELECT * FROM "${target}" LIMIT 200;`)
+                }
+              }
               result = { ...result, duration: ((performance.now() - start) / 1000).toFixed(3) }
               finalSql = retry.sql
               finalExplanation = retry.explanation
@@ -472,6 +612,14 @@ export default function ChatEngine({
         }
       }
 
+      onResult?.({
+        result,
+        prompt: text,
+        sql: finalSql,
+        targetTable: finalSql ? extractTargetTable(finalSql, tables) : null,
+        source: 'chat',
+      })
+
       addMsg({ role: 'assistant', text: finalExplanation, sql: finalSql, result, error: null })
 
       setConversationHistory(prev => [
@@ -482,15 +630,25 @@ export default function ChatEngine({
 
     } catch (err) {
       const msg = err?.message || String(err)
+      if (/invalid\s*api\s*key|invalid_api_key|unauthorized|authentication/i.test(msg)) {
+        setGroqApiKey('')
+        setForceLocalMode(true)
+        setAiAvailable(false)
+        addMsg({ role: 'assistant', text: 'La API key configurada es invalida. Cambie automaticamente a modo local para que sigas trabajando.', sql: null, result: null, error: null })
+        return
+      }
       if (msg.includes('malloc') || msg.toLowerCase().includes('out of memory')) {
         addMsg({ role: 'assistant', text: null, sql: null, result: null, error: 'Archivos demasiado grandes. Filtra con WHERE o usa el Asistente de Cruce.' })
+      } else if (msg.includes('NO_AI_RUNTIME') || msg.includes('NO_API_KEY')) {
+        setAiAvailable(false)
+        addMsg({ role: 'assistant', text: 'El runtime IA no esta disponible en este despliegue. Puedes seguir en modo local.', sql: null, result: null, error: null })
       } else {
         addMsg({ role: 'assistant', text: null, sql: null, result: null, error: `Error: ${msg}` })
       }
     } finally {
       setIsThinking(false)
     }
-  }, [input, tables, isThinking, addMsg, conversationHistory])
+  }, [input, tables, isThinking, addMsg, conversationHistory, forceLocalMode, onResult, activeTableName, executeLocalCommand])
 
   const handleConsolidate = useCallback(() => {
     if (tables.length < 2) { addToast?.('Carga al menos 2 archivos para consolidar.', 'info'); return }
@@ -508,79 +666,118 @@ export default function ChatEngine({
   }, [handleSend])
 
   const handleKeyDown = (e) => {
+    if (showSuggestions && visibleSuggestions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSelectedSuggestionIndex((current) => (current + 1) % visibleSuggestions.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSelectedSuggestionIndex((current) => (current - 1 + visibleSuggestions.length) % visibleSuggestions.length)
+        return
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault()
+        applySuggestion(visibleSuggestions[selectedSuggestionIndex])
+        return
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault()
+        applySuggestion(visibleSuggestions[selectedSuggestionIndex])
+        return
+      }
+      if (e.key === 'Escape') {
+        setShowSuggestions(false)
+        return
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
   }
 
-  const suggestions = useMemo(() => {
-    if (!tables.length) return []
-    const t0 = tables[0]
-    const cols = t0.columns || []
-    const keyCol = cols.find(c => /id|ium|c[ou]d|clave|cedula|nit/i.test(c.name))
-    const s = [
-      `Muestra los primeros 20 registros de ${t0.name}`,
-      `Cuantos registros tiene ${t0.name}?`,
-      `Busca valores nulos en ${t0.name}`,
-    ]
-    if (keyCol) s.push(`Hay duplicados en ${keyCol.name}?`)
-    if (tables.length >= 2) s.push(`Cruza ${tables[0].name} con ${tables[1].name}`)
-    return s.slice(0, 5)
-  }, [tables])
-
-  const showSuggestions = suggestions.length > 0 && messages.length <= 3 && !isThinking
-
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#F4F7F4' }}>
-      <ActionBar
-        tables={tables}
-        onOpenCrossWizard={onOpenCrossWizard}
-        onOpenDashboard={onOpenDashboard}
-        onOpenKnowledgeBase={onOpenKnowledgeBase}
-        onConsolidate={handleConsolidate}
-        isThinking={isThinking}
-      />
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: isDark ? '#0B1410' : '#FFFFFF' }}>
+      {showActionBar && (
+        <ActionBar
+          tables={tables}
+          onOpenCrossWizard={onOpenCrossWizard}
+          onOpenDashboard={onOpenDashboard}
+          onConsolidate={handleConsolidate}
+          isThinking={isThinking}
+          palette={palette}
+          isDark={isDark}
+        />
+      )}
 
       {tables.length === 0 ? (
-        <EmptyState onOpenUploader={onOpenUploader} />
+        <EmptyState onOpenUploader={onOpenUploader} palette={palette} isDark={isDark} />
       ) : (
-        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 28px', display: 'flex', flexDirection: 'column', gap: 16, scrollbarWidth: 'thin', scrollbarColor: `${G.primary} ${G.light}` }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '14px 12px', display: 'flex', flexDirection: 'column', gap: 10, scrollbarWidth: 'thin', scrollbarColor: `${palette.primary} ${palette.panelSoft}` }}>
           {messages.map(msg =>
             msg.role === 'user'
-              ? <UserMessage key={msg.id} msg={msg} />
-              : <AssistantMessage key={msg.id} msg={msg} onExport={onExport} onExportExcel={onExportExcel} onSuggest={handleSend} />
+              ? <UserMessage key={msg.id} msg={msg} palette={palette} />
+              : <AssistantMessage key={msg.id} msg={msg} onExport={onExport} onExportExcel={onExportExcel} onSuggest={handleSend} palette={palette} isDark={isDark} />
           )}
-          {isThinking && <TypingIndicator />}
+          {isThinking && <TypingIndicator palette={palette} isDark={isDark} />}
           <div ref={bottomRef} />
         </div>
       )}
-
-      <AnimatePresence>
-        {showSuggestions && (
-          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} style={{ padding: '8px 20px 6px', display: 'flex', flexWrap: 'wrap', gap: 6, borderTop: `1px solid ${G.border}`, background: '#fff' }}>
-            <span style={{ fontSize: '0.67rem', color: G.dim, fontFamily: 'Inter,sans-serif', alignSelf: 'center', marginRight: 4 }}>Prueba:</span>
-            {suggestions.map((s, i) => (
-              <motion.button key={i} whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.96 }} onClick={() => handleSend(s)} style={{ padding: '4px 12px', borderRadius: 20, border: `1px solid ${G.border}`, background: '#F7FBF7', color: G.text2, fontSize: '0.72rem', fontFamily: 'Inter,sans-serif', cursor: 'pointer', fontWeight: 500 }}>{s}</motion.button>
-            ))}
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {tables.length > 0 && (
-        <div style={{ padding: '12px 20px', borderTop: `1px solid ${G.border}`, background: '#fff', display: 'flex', gap: 10, alignItems: 'flex-end' }}>
-          <motion.div animate={{ boxShadow: input ? `0 0 0 2px rgba(67,160,71,0.35)` : `0 0 0 1px ${G.border}` }} style={{ flex: 1, borderRadius: 14, overflow: 'hidden', background: '#FAFCFA' }}>
+        <div style={{ padding: '10px 10px 12px', borderTop: `1px solid ${palette.border}`, background: isDark ? '#0D1712' : '#fff', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+          <motion.div animate={{ boxShadow: input ? `0 0 0 1px ${isDark ? 'rgba(34,197,94,0.45)' : 'rgba(67,160,71,0.35)'}` : `0 0 0 1px ${palette.border}` }} style={{ flex: 1, borderRadius: 10, overflow: 'visible', background: isDark ? '#0B1D16' : '#FAFCFA', position: 'relative' }}>
             <textarea
               ref={textareaRef}
               value={input}
-              onChange={e => setInput(e.target.value)}
+              onChange={e => {
+                const nextValue = e.target.value
+                const nextCursor = e.target.selectionStart ?? nextValue.length
+                setInput(nextValue)
+                setCursorPosition(nextCursor)
+                setShowSuggestions(Boolean(buildAutocompleteContext(nextValue, nextCursor, tables, activeTableName)))
+              }}
+              onClick={e => setCursorPosition(e.currentTarget.selectionStart ?? input.length)}
+              onKeyUp={e => setCursorPosition(e.currentTarget.selectionStart ?? input.length)}
+              onSelect={e => setCursorPosition(e.currentTarget.selectionStart ?? input.length)}
               onKeyDown={handleKeyDown}
+              onFocus={e => setShowSuggestions(Boolean(buildAutocompleteContext(e.currentTarget.value, e.currentTarget.selectionStart ?? e.currentTarget.value.length, tables, activeTableName)))}
+              onBlur={() => setTimeout(() => setShowSuggestions(false), 120)}
               disabled={isThinking}
-              placeholder={AI_AVAILABLE ? 'Hazme cualquier pregunta sobre tus datos... (Enter para enviar)' : 'Configura VITE_AI_ORCHESTRATOR_URL o VITE_GROQ_API_KEY (ver guia arriba)'}
+              placeholder={aiAvailable ? 'Preguntar sobre los datos' : 'Modo local activo'}
               rows={1}
-              style={{ width: '100%', resize: 'none', border: 'none', outline: 'none', background: 'transparent', padding: '11px 16px', fontSize: '0.88rem', fontFamily: 'Inter,sans-serif', color: G.text, maxHeight: 140, lineHeight: 1.55, boxSizing: 'border-box' }}
+              style={{ width: '100%', resize: 'none', border: 'none', outline: 'none', background: 'transparent', padding: '10px 12px', fontSize: '0.84rem', fontFamily: 'Inter,sans-serif', color: palette.text, maxHeight: 120, lineHeight: 1.5, boxSizing: 'border-box' }}
             />
+            {showSuggestions && visibleSuggestions.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="absolute left-0 right-0 bottom-full mb-2 rounded-xl z-20 overflow-hidden max-h-[260px]"
+                style={{ background: isDark ? '#10271F' : '#FFFFFF', border: `1px solid ${palette.border}`, boxShadow: '0 10px 28px rgba(0,0,0,0.18)' }}>
+                {visibleSuggestions.map((item, index) => (
+                  <motion.button
+                    key={item.key}
+                    whileHover={{ backgroundColor: isDark ? '#143126' : '#F0F7F3' }}
+                    onMouseDown={() => applySuggestion(item)}
+                    className="w-full text-left px-4 py-3 flex items-center gap-3 transition-colors"
+                    style={{ borderBottom: index < visibleSuggestions.length - 1 ? `1px solid ${palette.border}` : 'none', background: index === selectedSuggestionIndex ? (isDark ? '#143126' : '#F0F7F3') : 'transparent' }}>
+                    <span style={{ color: palette.accent, fontSize: '0.72rem', fontFamily: 'JetBrains Mono, monospace' }}>
+                      {item.type === 'column' ? '# ' : 'tbl'}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="truncate" style={{ color: palette.text, fontSize: '0.82rem', fontFamily: 'Inter,sans-serif', fontWeight: 700 }}>
+                        {item.label}
+                      </div>
+                      <div className="truncate" style={{ color: palette.dim, fontSize: '0.72rem', fontFamily: 'Inter,sans-serif' }}>
+                        {item.caption ? `${item.caption} · ` : ''}Tab para insertar
+                      </div>
+                    </div>
+                  </motion.button>
+                ))}
+              </motion.div>
+            )}
           </motion.div>
-          <div title={AI_AVAILABLE ? 'IA activa (orchestrator o fallback)' : 'Sin IA - configura runtime'} style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, marginBottom: 20, background: AI_AVAILABLE ? '#43A047' : '#FFB300', boxShadow: AI_AVAILABLE ? '0 0 6px rgba(67,160,71,0.8)' : '0 0 6px rgba(255,179,0,0.8)' }} />
           <motion.button onClick={() => handleSend()} disabled={!input.trim() || isThinking} whileHover={{ scale: input.trim() && !isThinking ? 1.06 : 1 }} whileTap={{ scale: input.trim() && !isThinking ? 0.93 : 1 }}
-            style={{ width: 46, height: 46, borderRadius: 13, flexShrink: 0, border: 'none', cursor: input.trim() && !isThinking ? 'pointer' : 'not-allowed', background: input.trim() && !isThinking ? `linear-gradient(135deg, ${G.primary}, ${G.dark})` : G.border, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: input.trim() && !isThinking ? '0 4px 14px rgba(67,160,71,0.4)' : 'none', transition: 'background 0.2s' }}>
+            style={{ width: 38, height: 38, borderRadius: 10, flexShrink: 0, border: 'none', cursor: input.trim() && !isThinking ? 'pointer' : 'not-allowed', background: input.trim() && !isThinking ? `linear-gradient(145deg, ${palette.primary}, ${palette.accent})` : palette.border, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'none', transition: 'background 0.2s' }}>
             {isThinking
               ? <motion.span animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 0.8, ease: 'linear' }} style={{ width: 16, height: 16, border: '2px solid white', borderTopColor: 'transparent', borderRadius: '50%', display: 'block' }} />
               : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="white" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>

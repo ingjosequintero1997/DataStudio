@@ -1,639 +1,629 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { executeQuery } from '../../lib/duckdb'
 
-const spring = { type: 'spring', stiffness: 320, damping: 28 }
-const G = { dark: '#0D4F1E', primary: '#2E7D32', accent: '#4CAF50', light: '#E8F5E9', panel: '#F7FBF7', border: '#C8DCC8', text: '#1B3318', dim: '#5D7D5F' }
-
-const TEMPLATES = {
-  indicadores: { dashboardTitle: '📊 Dashboard de Indicadores en Salud', chartTitle: 'Comportamiento Principal', distributionTitle: 'Distribución de Casos', pivotTitle: 'Análisis Dinámico' },
-  auditoria: { dashboardTitle: '🔍 Dashboard de Auditoría y Cumplimiento', chartTitle: 'Hallazgos por Prioridad', distributionTitle: 'Distribución por Estado', pivotTitle: 'Análisis de Auditoría' },
-  requerimientos: { dashboardTitle: '✓ Dashboard de Requerimientos y Gestión', chartTitle: 'Seguimiento Operativo', distributionTitle: 'Distribución por Responsable', pivotTitle: 'Análisis de Requerimientos' },
-  informes: { dashboardTitle: '📈 Dashboard Ejecutivo de Informes', chartTitle: 'Resumen Analítico', distributionTitle: 'Composición del Resultado', pivotTitle: 'Análisis Ejecutivo' },
+const C = {
+  dark: {
+    bg: '#07120E',
+    panel: '#0F2019',
+    panelSoft: '#12261E',
+    panelAlt: '#163126',
+    border: 'rgba(52,211,153,0.18)',
+    text: '#E8FFF2',
+    dim: 'rgba(167,220,195,0.8)',
+    muted: 'rgba(167,220,195,0.55)',
+    accent: '#22C55E',
+    accent2: '#10B981',
+    accent3: '#34D399',
+  },
+  light: {
+    bg: '#EEF6F1',
+    panel: '#FFFFFF',
+    panelSoft: '#F5FBF7',
+    panelAlt: '#E7F4EB',
+    border: '#CFE1D4',
+    text: '#163728',
+    dim: '#607C6C',
+    muted: '#7D9889',
+    accent: '#15803D',
+    accent2: '#16A34A',
+    accent3: '#22C55E',
+  },
 }
 
-function isNumeric(v) { return v !== null && v !== undefined && v !== '' && !Number.isNaN(Number(v)) }
+const PALETTE = ['#22C55E', '#10B981', '#14B8A6', '#38BDF8', '#0EA5E9', '#84CC16', '#F59E0B', '#F97316']
 
-function groupRows(rows, rowField, columnField, metricField, agg) {
-  const grouped = new Map()
+function isNumeric(value) {
+  return value !== null && value !== undefined && value !== '' && !Number.isNaN(Number(value))
+}
+
+function aggregateRows(rows, dimension, metric, agg, topN, sortDir = 'desc') {
+  if (!rows?.length || !dimension) return []
+  const buckets = new Map()
+
   rows.forEach((row) => {
-    const key = String(row[rowField] ?? 'Sin dato')
-    const columnKey = columnField ? String(row[columnField] ?? 'Sin dato') : 'Valor'
-    const metric = metricField ? Number(row[metricField] ?? 0) : 1
-    if (!grouped.has(key)) grouped.set(key, new Map())
-    const rowBucket = grouped.get(key)
-    if (!rowBucket.has(columnKey)) rowBucket.set(columnKey, [])
-    rowBucket.get(columnKey).push(metric)
+    const key = String(row[dimension] ?? 'Sin dato')
+    const metricValue = metric && isNumeric(row[metric]) ? Number(row[metric]) : 0
+    if (!buckets.has(key)) buckets.set(key, [])
+    buckets.get(key).push(metricValue)
   })
-  const reducers = { count: (v) => v.length, sum: (v) => v.reduce((a, x) => a + x, 0), avg: (v) => v.length ? v.reduce((a, x) => a + x, 0) / v.length : 0, max: (v) => v.length ? Math.max(...v) : 0, min: (v) => v.length ? Math.min(...v) : 0 }
+
+  const reducers = {
+    count: (values) => values.length,
+    sum: (values) => values.reduce((acc, value) => acc + value, 0),
+    avg: (values) => values.length ? values.reduce((acc, value) => acc + value, 0) / values.length : 0,
+    max: (values) => values.length ? Math.max(...values) : 0,
+    min: (values) => values.length ? Math.min(...values) : 0,
+  }
+
   const reduce = reducers[agg] || reducers.count
-  return Array.from(grouped.entries()).map(([label, valuesMap]) => {
-    const values = Object.fromEntries(Array.from(valuesMap.entries()).map(([k, b]) => [k, reduce(b)]))
-    const total = Object.values(values).reduce((a, v) => a + Number(v || 0), 0)
-    return { label, values, total }
-  }).sort((a, b) => b.total - a.total)
+  const items = Array.from(buckets.entries()).map(([label, values], index) => ({
+    id: `${label}-${index}`,
+    label,
+    total: agg === 'count' ? values.length : reduce(values),
+  }))
+
+  items.sort((a, b) => sortDir === 'asc' ? a.total - b.total : b.total - a.total)
+  return items.slice(0, topN)
 }
 
-function KpiCardPro({ title, value, subtitle, trend, color = '#2E7D32' }) {
-  const isPositive = trend > 0
+function formatNumber(value) {
+  return Number(value || 0).toLocaleString('es-ES', { maximumFractionDigits: 2 })
+}
+
+function buildNarrative(data, metricLabel) {
+  if (!data.length) return []
+  const total = data.reduce((acc, item) => acc + Number(item.total || 0), 0)
+  const top = data[0]
+  const second = data[1]
+  const insights = []
+
+  if (top) {
+    const share = total ? (Number(top.total || 0) / total) * 100 : 0
+    insights.push(`${top.label} lidera con ${formatNumber(top.total)} (${share.toFixed(1)}% del total ${metricLabel}).`)
+  }
+
+  if (top && second) {
+    insights.push(`La brecha entre ${top.label} y ${second.label} es de ${formatNumber(Number(top.total || 0) - Number(second.total || 0))}.`)
+  }
+
+  const bottom = data[data.length - 1]
+  if (bottom && bottom !== top) {
+    insights.push(`${bottom.label} aparece como el valor mas bajo con ${formatNumber(bottom.total)}.`)
+  }
+
+  return insights.slice(0, 3)
+}
+
+function Field({ label, children }) {
   return (
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="group relative overflow-hidden rounded-2xl border px-5 py-4 transition-all hover:scale-105 hover:shadow-lg" style={{ background: '#fff', borderColor: G.border, boxShadow: '0 4px 16px rgba(31,107,53,0.08)' }}>
-      <div className="absolute inset-0 opacity-0 transition-opacity group-hover:opacity-100" style={{ background: `linear-gradient(135deg, ${color}08, transparent)` }} />
-      <div className="relative">
-        <div className="text-[10px] font-bold uppercase tracking-[0.2em]" style={{ color: G.dim }}>⎯ {title}</div>
-        <div className="mt-2 flex items-end gap-3">
-          <div className="text-4xl font-black" style={{ color }}>{value}</div>
-          {trend !== undefined && <div className="mb-1 text-xs font-bold" style={{ color: isPositive ? '#2E7D32' : '#C62828' }}>{isPositive ? '↑' : '↓'} {Math.abs(trend).toFixed(1)}%</div>}
-        </div>
-        <div className="mt-2 text-[11px]" style={{ color: G.dim }}>{subtitle}</div>
-      </div>
-    </motion.div>
+    <div style={{ display: 'grid', gap: 6 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', opacity: 0.82 }}>{label}</div>
+      {children}
+    </div>
   )
 }
 
-function AdvancedBarChart({ data, title }) {
-  const max = Math.max(...data.map((i) => i.total), 1)
-  const colors = ['#2E7D32', '#43A047', '#66BB6A', '#81C784', '#A5D6A7', '#C8E6C9']
+function Select({ value, onChange, children, colors, isDark }) {
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="rounded-[20px] border p-6" style={{ background: '#fff', borderColor: G.border, boxShadow: '0 6px 20px rgba(46,125,50,0.1)' }}>
-      <div className="mb-6 flex items-center justify-between">
-        <div className="text-lg font-black" style={{ color: G.dark }}>📊 {title}</div>
-        <div className="text-xs" style={{ color: G.dim }}>{data.length} elementos</div>
+    <select
+      value={value}
+      onChange={onChange}
+      style={{
+        width: '100%',
+        padding: '10px 12px',
+        borderRadius: 12,
+        border: `1px solid ${colors.border}`,
+        background: isDark ? '#0F2119' : '#fff',
+        color: colors.text,
+        fontSize: 14,
+        outline: 'none',
+      }}>
+      {children}
+    </select>
+  )
+}
+
+function KpiCard({ title, value, subtitle, colors, isDark }) {
+  return (
+    <div style={{ border: `1px solid ${colors.border}`, background: isDark ? 'linear-gradient(160deg, #173226, #10231B)' : '#fff', borderRadius: 18, padding: 18, boxShadow: isDark ? '0 12px 28px rgba(0,0,0,0.22)' : '0 14px 30px rgba(0,0,0,0.06)' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: colors.muted, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{title}</div>
+      <div style={{ marginTop: 10, fontSize: 30, lineHeight: 1, fontWeight: 800, color: colors.text }}>{value}</div>
+      <div style={{ marginTop: 8, fontSize: 13, color: colors.dim }}>{subtitle}</div>
+    </div>
+  )
+}
+
+function HeroBarChart({ data, colors, isDark }) {
+  const max = Math.max(...data.map((item) => Number(item.total || 0)), 1)
+  return (
+    <div style={{ border: `1px solid ${colors.border}`, borderRadius: 20, background: isDark ? 'linear-gradient(180deg,#13261E,#10211A)' : '#fff', padding: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 16 }}>
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: colors.text }}>Vista principal</div>
+          <div style={{ fontSize: 13, color: colors.dim }}>Comparativo por categoria con lectura ejecutiva inmediata</div>
+        </div>
       </div>
-      <div className="space-y-4">
-        {data.slice(0, 8).map((item, idx) => (
-          <motion.div key={`${item.label}-${idx}`} initial={{ width: 0 }} animate={{ width: '100%' }} transition={{ delay: idx * 0.05 }}>
-            <div className="mb-1.5 flex items-center justify-between text-xs font-semibold" style={{ color: G.text }}>
-              <span className="truncate pr-3 max-w-[60%]">{item.label}</span>
-              <span style={{ color: colors[idx % colors.length] }}>{item.total.toLocaleString()}</span>
+      <div style={{ display: 'grid', gap: 12 }}>
+        {data.map((item, index) => (
+          <div key={item.id} style={{ display: 'grid', gridTemplateColumns: '220px 1fr 90px', gap: 12, alignItems: 'center' }}>
+            <div style={{ fontSize: 13, color: colors.text, fontWeight: index === 0 ? 700 : 600, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{item.label}</div>
+            <div style={{ height: 18, borderRadius: 999, background: isDark ? 'rgba(255,255,255,0.06)' : '#EDF6EF', overflow: 'hidden' }}>
+              <div style={{ width: `${Math.max(6, (Number(item.total || 0) / max) * 100)}%`, height: '100%', borderRadius: 999, background: `linear-gradient(90deg, ${PALETTE[index % PALETTE.length]}, ${colors.accent3})`, boxShadow: 'inset 0 0 12px rgba(255,255,255,0.18)' }} />
             </div>
-            <div className="h-4 overflow-hidden rounded-full" style={{ background: '#E5EFE5' }}>
-              <motion.div initial={{ width: 0 }} animate={{ width: `${(item.total / max) * 100}%` }} transition={{ delay: idx * 0.05 + 0.2, duration: 0.8 }} style={{ background: `linear-gradient(90deg, ${colors[idx % colors.length]}, ${colors[(idx + 1) % colors.length]})`, height: '100%', borderRadius: '9999px', boxShadow: `0 0 12px ${colors[idx % colors.length]}40` }} />
-            </div>
-          </motion.div>
+            <div style={{ fontSize: 13, color: colors.dim, fontWeight: 800, textAlign: 'right' }}>{formatNumber(item.total)}</div>
+          </div>
         ))}
       </div>
-    </motion.div>
+    </div>
   )
 }
 
-function AdvancedDonutChart({ data, title }) {
-  const total = data.reduce((a, i) => a + i.total, 0) || 1
-  const colors = ['#0D4F1E', '#2E7D32', '#43A047', '#66BB6A', '#81C784', '#A5D6A7']
-  let offset = 0
+function DonutSummary({ data, colors, isDark }) {
+  const total = data.reduce((acc, item) => acc + Number(item.total || 0), 0)
+  let cursor = 0
+  const gradient = data.slice(0, 6).map((item, index) => {
+    const ratio = total ? Number(item.total || 0) / total : 0
+    const start = cursor * 360
+    cursor += ratio
+    const end = cursor * 360
+    return `${PALETTE[index % PALETTE.length]} ${start}deg ${end}deg`
+  }).join(', ')
+
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="rounded-[20px] border p-6" style={{ background: '#fff', borderColor: G.border, boxShadow: '0 6px 20px rgba(46,125,50,0.1)' }}>
-      <div className="mb-6 text-lg font-black" style={{ color: G.dark }}>🎯 {title}</div>
-      <div className="flex items-center justify-between gap-6">
-        <svg width="160" height="160" viewBox="0 0 160 160" style={{ filter: 'drop-shadow(0 4px 12px rgba(46,125,50,0.15))' }}>
-          <g transform="translate(80 80)">
-            {data.slice(0, 6).map((item, idx) => {
-              const portion = item.total / total
-              const length = portion * 282.743
-              const curr = offset
-              offset += length
-              return (
-                <motion.circle key={`${item.label}-${idx}`} initial={{ strokeDashoffset: 282.743 }} animate={{ strokeDashoffset: -curr }} transition={{ delay: idx * 0.1, duration: 0.8 }} r="45" cx="0" cy="0" fill="transparent" stroke={colors[idx % colors.length]} strokeWidth="26" strokeDasharray={`${length} ${282.743 - length}`} transform="rotate(-90)" style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))' }} />
-              )
-            })}
-            <circle r="24" fill="#fff" />
-            <text textAnchor="middle" y="-2" fontSize="20" fontWeight="900" fill={G.dark}>{data.length}</text>
-            <text textAnchor="middle" y="14" fontSize="9" fill={G.dim}>categorías</text>
-          </g>
-        </svg>
-        <div className="space-y-3">
-          {data.slice(0, 6).map((item, idx) => (
-            <motion.div key={`legend-${idx}`} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: idx * 0.05 }} className="flex items-center gap-3">
-              <div className="h-3 w-3 rounded-full" style={{ background: colors[idx % colors.length], boxShadow: `0 2px 8px ${colors[idx % colors.length]}40` }} />
-              <span className="text-xs font-semibold" style={{ color: G.text }}>{item.label}</span>
-              <span className="ml-auto text-xs font-black" style={{ color: colors[idx % colors.length] }}>{((item.total / total) * 100).toFixed(1)}%</span>
-            </motion.div>
-          ))}
+    <div style={{ border: `1px solid ${colors.border}`, borderRadius: 20, background: isDark ? '#13251D' : '#fff', padding: 18 }}>
+      <div style={{ fontSize: 18, fontWeight: 800, color: colors.text, marginBottom: 16 }}>Composicion</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr', gap: 18, alignItems: 'center' }}>
+        <div style={{ width: 180, height: 180, borderRadius: '50%', background: `conic-gradient(${gradient || `${colors.accent} 0deg 360deg`})`, position: 'relative', margin: '0 auto' }}>
+          <div style={{ position: 'absolute', inset: 34, borderRadius: '50%', background: isDark ? '#0E1E17' : '#fff', border: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: 12 }}>
+            <div>
+              <div style={{ fontSize: 11, color: colors.muted, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Total</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: colors.text }}>{formatNumber(total)}</div>
+            </div>
+          </div>
+        </div>
+        <div style={{ display: 'grid', gap: 8 }}>
+          {data.slice(0, 6).map((item, index) => {
+            const share = total ? (Number(item.total || 0) / total) * 100 : 0
+            return (
+              <div key={item.id} style={{ display: 'grid', gridTemplateColumns: '14px 1fr auto', gap: 10, alignItems: 'center' }}>
+                <span style={{ width: 12, height: 12, borderRadius: 4, background: PALETTE[index % PALETTE.length] }} />
+                <span style={{ color: colors.text, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.label}</span>
+                <span style={{ color: colors.dim, fontSize: 13, fontWeight: 700 }}>{share.toFixed(1)}%</span>
+              </div>
+            )
+          })}
         </div>
       </div>
-    </motion.div>
+    </div>
   )
 }
 
-function AreaChart({ data, title }) {
-  const width = 540
-  const height = 240
-  const values = data.slice(0, 12).map((i) => i.total)
-  const max = Math.max(...values, 1)
-  const points = values.map((v, idx) => {
-    const x = (idx / Math.max(values.length - 1, 1)) * (width - 40) + 20
-    const y = height - ((v / max) * (height - 40) + 20)
-    return `${x},${y}`
-  }).join(' ')
+function LineTrend({ data, colors, isDark }) {
+  const max = Math.max(...data.map((item) => Number(item.total || 0)), 1)
+  const points = data.map((item, index) => {
+    const x = data.length > 1 ? (index / (data.length - 1)) * 100 : 50
+    const y = 100 - ((Number(item.total || 0) / max) * 80 + 10)
+    return { x, y, label: item.label, total: item.total }
+  })
+  const polyline = points.map((point) => `${point.x},${point.y}`).join(' ')
+
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="rounded-[20px] border p-6" style={{ background: '#fff', borderColor: G.border, boxShadow: '0 6px 20px rgba(46,125,50,0.1)' }}>
-      <div className="mb-6 text-lg font-black" style={{ color: G.dark }}>📈 {title}</div>
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full">
+    <div style={{ border: `1px solid ${colors.border}`, borderRadius: 20, background: isDark ? '#13251D' : '#fff', padding: 18 }}>
+      <div style={{ fontSize: 18, fontWeight: 800, color: colors.text, marginBottom: 12 }}>Tendencia visual</div>
+      <svg viewBox="0 0 100 100" style={{ width: '100%', height: 240 }}>
         <defs>
-          <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#2E7D32" stopOpacity="0.3" />
-            <stop offset="100%" stopColor="#2E7D32" stopOpacity="0" />
+          <linearGradient id="dashboardLineFill" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor={colors.accent3} stopOpacity="0.36" />
+            <stop offset="100%" stopColor={colors.accent3} stopOpacity="0" />
           </linearGradient>
-          <filter id="chartShadow"><feDropShadow dx="0" dy="2" stdDeviation="3" floodOpacity="0.2" /></filter>
         </defs>
-        <motion.polyline initial={{ strokeDashoffset: 500 }} animate={{ strokeDashoffset: 0 }} transition={{ duration: 1.2 }} fill="none" stroke="#2E7D32" strokeWidth="3" points={points} filter="url(#chartShadow)" strokeDasharray="500" />
-        <polygon fill="url(#areaFill)" points={`${points} ${width - 20},${height - 20} 20,${height - 20}`} />
+        <polyline fill="none" stroke={colors.accent3} strokeWidth="2.5" points={polyline} />
+        <polygon fill="url(#dashboardLineFill)" points={`0,100 ${polyline} 100,100`} />
+        {points.map((point, index) => (
+          <g key={`${point.label}-${index}`}>
+            <circle cx={point.x} cy={point.y} r="2.1" fill={PALETTE[index % PALETTE.length]} />
+          </g>
+        ))}
       </svg>
-    </motion.div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 8 }}>
+        {points.slice(0, 6).map((point, index) => (
+          <div key={`${point.label}-legend-${index}`} style={{ fontSize: 12, color: colors.dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {point.label}: <strong style={{ color: colors.text }}>{formatNumber(point.total)}</strong>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 
-export default function DashboardStudio({ open, onClose, tables, result, addToast, onAskAssistant }) {
+function RankingTable({ data, dimension, metricLabel, colors, isDark }) {
+  return (
+    <div style={{ border: `1px solid ${colors.border}`, borderRadius: 20, background: isDark ? '#13251D' : '#fff', overflow: 'hidden' }}>
+      <div style={{ padding: '16px 18px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: colors.text }}>Ranking tabular</div>
+          <div style={{ fontSize: 13, color: colors.dim }}>Lista ordenada para lectura operativa y analitica</div>
+        </div>
+      </div>
+      <div style={{ maxHeight: 360, overflow: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: isDark ? '#173126' : '#EEF7F0' }}>
+              <th style={{ textAlign: 'left', padding: '10px 12px', fontSize: 12, color: colors.text }}>#</th>
+              <th style={{ textAlign: 'left', padding: '10px 12px', fontSize: 12, color: colors.text }}>{dimension || 'Dimension'}</th>
+              <th style={{ textAlign: 'right', padding: '10px 12px', fontSize: 12, color: colors.text }}>{metricLabel}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.map((item, index) => (
+              <tr key={item.id} style={{ background: index % 2 ? (isDark ? '#11211A' : '#fff') : (isDark ? '#102019' : '#F9FCFA') }}>
+                <td style={{ padding: '10px 12px', fontSize: 13, color: colors.dim, borderBottom: `1px solid ${colors.border}` }}>{index + 1}</td>
+                <td style={{ padding: '10px 12px', fontSize: 13, color: colors.text, fontWeight: 600, borderBottom: `1px solid ${colors.border}` }}>{item.label}</td>
+                <td style={{ padding: '10px 12px', fontSize: 13, color: colors.text, fontWeight: 700, borderBottom: `1px solid ${colors.border}`, textAlign: 'right' }}>{formatNumber(item.total)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+export default function DashboardStudio({ open, onClose, tables, result, addToast, onAskAssistant, theme = 'light' }) {
+  const isDark = theme === 'dark'
+  const colors = isDark ? C.dark : C.light
+  const reportRef = useRef(null)
+
   const [sourceType, setSourceType] = useState(result?.rows?.length ? 'result' : 'table')
   const [sourceName, setSourceName] = useState(result?.rows?.length ? '__current_result__' : (tables[0]?.name || ''))
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [templateKey, setTemplateKey] = useState('indicadores')
-  const [titles, setTitles] = useState(TEMPLATES.indicadores)
-  const [rowField, setRowField] = useState('')
-  const [columnField, setColumnField] = useState('')
-  const [metricField, setMetricField] = useState('')
+  const [reportTitle, setReportTitle] = useState('Reporte Ejecutivo')
+  const [reportSubtitle, setReportSubtitle] = useState('Panel listo para compartir sin salir de NERV')
+  const [dimension, setDimension] = useState('')
+  const [metric, setMetric] = useState('')
   const [agg, setAgg] = useState('count')
-  const [chartType, setChartType] = useState('bar')
-  const [exportingImage, setExportingImage] = useState(false)
-  const [exportingPdf, setExportingPdf] = useState(false)
-  const [printing, setPrinting] = useState(false)
-  const [labels, setLabels] = useState({
-    kpiSection: 'Indicadores clave',
-    chartsSection: 'Visualizaciones analiticas',
-    tableSection: 'Analisis de Auditoria',
-  })
-  const [paragraphs, setParagraphs] = useState({
-    intro: 'Panel ejecutivo configurable para indicadores, auditorias, requerimientos e informes. Ajusta dimensiones, metricas y narrativa para cada audiencia.',
-    analysis: 'Lectura recomendada: identifica categorias de mayor impacto y valida tendencias con la tabla dinamica para soportar decisiones rapidas.',
-    notes: 'Nota del informe: personaliza estos parrafos para contexto operativo, riesgos detectados, acciones propuestas y responsables.',
-  })
+  const [chartMode, setChartMode] = useState('bars')
+  const [topN, setTopN] = useState(8)
+  const [sortDir, setSortDir] = useState('desc')
+  const [isCompactViewport, setIsCompactViewport] = useState(false)
 
   useEffect(() => {
-    setTitles(TEMPLATES[templateKey])
-  }, [templateKey])
+    if (!open) return
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') onClose?.()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [open, onClose])
+
+  useEffect(() => {
+    if (!open) return
+
+    const updateViewport = () => {
+      setIsCompactViewport(window.innerWidth < 1320 || window.innerHeight < 860)
+    }
+
+    updateViewport()
+    window.addEventListener('resize', updateViewport)
+    return () => window.removeEventListener('resize', updateViewport)
+  }, [open])
 
   useEffect(() => {
     if (!open) return
     let active = true
-    async function loadSource() {
+
+    async function loadData() {
       setLoading(true)
       setError(null)
       try {
         if (sourceType === 'result' && result?.rows?.length) {
-          if (!active) return
-          setRows(result.rows)
+          if (active) setRows(result.rows)
           return
         }
         if (!sourceName) {
-          setRows([])
+          if (active) setRows([])
           return
         }
-        const response = await executeQuery(`SELECT * FROM "${sourceName}" LIMIT 1500;`)
-        if (!active) return
-        setRows(response.rows || [])
+        const query = await executeQuery(`SELECT * FROM "${sourceName}" LIMIT 5000;`)
+        if (active) setRows(query.rows || [])
       } catch (caught) {
-        if (!active) return
-        setError(caught?.message || 'No pude cargar la fuente para el dashboard.')
-        setRows([])
+        if (active) {
+          setRows([])
+          setError(caught?.message || 'No se pudo cargar la fuente seleccionada.')
+        }
       } finally {
         if (active) setLoading(false)
       }
     }
-    loadSource()
+
+    loadData()
     return () => { active = false }
-  }, [open, result, sourceName, sourceType])
+  }, [open, sourceType, sourceName, result])
 
   const columns = useMemo(() => rows.length ? Object.keys(rows[0]) : [], [rows])
-  const numericColumns = useMemo(() => columns.filter((column) => rows.some((row) => isNumeric(row[column]))), [columns, rows])
+  const numericColumns = useMemo(() => columns.filter((col) => rows.some((row) => isNumeric(row[col]))), [columns, rows])
 
   useEffect(() => {
     if (!columns.length) return
-    if (!rowField || !columns.includes(rowField)) setRowField(columns[0])
-    if (numericColumns.length && (!metricField || !numericColumns.includes(metricField))) setMetricField(numericColumns[0])
-    if (!columnField || !columns.includes(columnField)) setColumnField(columns[1] || '')
-  }, [columns, rowField, columnField, metricField, numericColumns])
-
-  const grouped = useMemo(() => {
-    if (!rows.length || !rowField) return []
-    return groupRows(rows, rowField, columnField, agg === 'count' ? null : metricField, agg)
-  }, [rows, rowField, columnField, metricField, agg])
-
-  const kpis = useMemo(() => {
-    const totalRows = rows.length
-    const distinct = rowField ? new Set(rows.map((row) => String(row[rowField] ?? 'Sin dato'))).size : 0
-    const numericValues = metricField ? rows.map((row) => Number(row[metricField] || 0)).filter((value) => !Number.isNaN(value)) : []
-    const total = numericValues.reduce((acc, value) => acc + value, 0)
-    const avg = numericValues.length ? total / numericValues.length : 0
-    return [
-      { title: 'Registros', value: totalRows.toLocaleString(), subtitle: 'base analizada' },
-      { title: 'Categorias', value: distinct.toLocaleString(), subtitle: rowField || 'sin dimension' },
-      { title: 'Total', value: total.toLocaleString(undefined, { maximumFractionDigits: 1 }), subtitle: metricField || 'conteo' },
-      { title: 'Promedio', value: avg.toLocaleString(undefined, { maximumFractionDigits: 1 }), subtitle: metricField || 'conteo' },
-    ]
-  }, [rows, rowField, metricField])
-
-  const anomalyHighlights = useMemo(() => {
-    if (!rows.length || !columns.length) return []
-    const findings = []
-    const totalRows = rows.length
-
-    // Alta nulidad
-    columns.forEach((col) => {
-      const nulls = rows.filter(r => r[col] === null || r[col] === undefined || String(r[col]).trim() === '').length
-      const pct = totalRows > 0 ? (nulls / totalRows) * 100 : 0
-      if (pct >= 35) findings.push({ level: 'critico', text: `${col}: ${pct.toFixed(1)}% vacíos` })
-    })
-
-    // Categorías dominantes
-    if (grouped.length > 0) {
-      const total = grouped.reduce((a, g) => a + Number(g.total || 0), 0)
-      const top = grouped[0]
-      const topPct = total > 0 ? (Number(top.total || 0) / total) * 100 : 0
-      if (topPct >= 65) findings.push({ level: 'atencion', text: `Alta concentración en "${top.label}" (${topPct.toFixed(1)}%)` })
+    if (!dimension || !columns.includes(dimension)) setDimension(columns[0])
+    if (numericColumns.length) {
+      if (!metric || !numericColumns.includes(metric)) setMetric(numericColumns[0])
+    } else {
+      setMetric('')
+      if (agg !== 'count') setAgg('count')
     }
+  }, [columns, numericColumns, dimension, metric, agg])
 
-    if (!findings.length) findings.push({ level: 'ok', text: 'Sin anomalías críticas visibles en la vista actual.' })
-    return findings.slice(0, 4)
-  }, [rows, columns, grouped])
-
-  const narrativeInsight = useMemo(() => {
-    if (!grouped.length) return 'Sin datos suficientes para generar narrativa automática.'
-    const top = grouped[0]
-    const second = grouped[1]
-    const total = grouped.reduce((acc, item) => acc + Number(item.total || 0), 0)
-    const topPct = total > 0 ? ((Number(top.total || 0) / total) * 100).toFixed(1) : '0.0'
-    const gap = second ? Number(top.total || 0) - Number(second.total || 0) : Number(top.total || 0)
-    return `Hallazgo principal: "${top.label}" lidera con ${Number(top.total || 0).toLocaleString()} (${topPct}% del total). Brecha vs segundo lugar: ${gap.toLocaleString()}.`
-  }, [grouped])
-
-  const dashboardAssistantPrompts = useMemo(() => {
-    const sourceLabel = sourceName === '__current_result__' ? 'resultado actual' : sourceName
-    return [
-      `Analiza este dashboard de ${sourceLabel}. Quiero 5 hallazgos ejecutivos con impacto y riesgo.`,
-      `Resume este dashboard para directivos en lenguaje simple y claro en maximo 6 lineas.`,
-      `Propón 3 decisiones accionables basadas en este dashboard y qué validar después.`,
-    ]
-  }, [sourceName])
-
-  const applyAutoNarrative = () => {
-    setParagraphs((prev) => ({
-      ...prev,
-      analysis: narrativeInsight,
-      notes: `Recomendación: validar la categoría "${grouped[0]?.label || 'principal'}" y revisar causas en las dimensiones con menor desempeño.`,
-    }))
-    addToast?.('Narrativa automática aplicada', 'success', 'Dashboard Studio')
-  }
+  const aggregated = useMemo(() => aggregateRows(rows, dimension, agg === 'count' ? '' : metric, agg, topN, sortDir), [rows, dimension, metric, agg, topN, sortDir])
+  const fullAggregated = useMemo(() => aggregateRows(rows, dimension, agg === 'count' ? '' : metric, agg, 25, sortDir), [rows, dimension, metric, agg, sortDir])
+  const totalMetric = useMemo(() => aggregated.reduce((acc, item) => acc + Number(item.total || 0), 0), [aggregated])
+  const distinctCount = useMemo(() => dimension ? new Set(rows.map((row) => String(row[dimension] ?? 'Sin dato'))).size : 0, [rows, dimension])
+  const avgMetric = useMemo(() => aggregated.length ? totalMetric / aggregated.length : 0, [aggregated, totalMetric])
+  const insights = useMemo(() => buildNarrative(aggregated, agg === 'count' ? 'conteo' : (metric || 'metrica')), [aggregated, agg, metric])
+  const metricLabel = agg === 'count' ? 'Conteo' : `${agg.toUpperCase()} de ${metric || 'metrica'}`
 
   const sourceOptions = [
     ...(result?.rows?.length ? [{ value: '__current_result__', label: 'Resultado actual' }] : []),
     ...tables.map((table) => ({ value: table.name, label: table.name })),
   ]
 
-  const getDashboardCanvas = async () => {
-    const target = document.querySelector('[data-dashboard-export]')
-    if (!target) throw new Error('No se encontro el panel para exportar.')
-    const { default: html2canvas } = await import('html2canvas')
-    return html2canvas(target, {
-      backgroundColor: '#F4F7F4',
-      scale: 2.5,
-      useCORS: true,
-      logging: false,
-      windowWidth: target.scrollWidth,
-      windowHeight: target.scrollHeight,
-      scrollX: 0,
-      scrollY: -window.scrollY,
-    })
+  const exportRows = useMemo(() => fullAggregated.map((item) => ({
+    [dimension || 'dimension']: item.label,
+    valor: Number(item.total || 0),
+    operacion: agg,
+    metrica: metric || 'conteo',
+  })), [fullAggregated, dimension, agg, metric])
+
+  const canExport = exportRows.length > 0
+  const stackLayout = isCompactViewport
+
+  const handleExportCsv = () => {
+    if (!canExport) {
+      addToast?.('No hay datos para exportar.', 'info')
+      return
+    }
+    const header = Object.keys(exportRows[0])
+    const body = exportRows.map((row) => header.map((col) => {
+      const value = String(row[col] ?? '')
+      return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
+    }).join(',')).join('\n')
+    const blob = new Blob([[header.join(','), body].join('\n')], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `dashboard_${Date.now()}.csv`
+    anchor.click()
+    URL.revokeObjectURL(url)
+    addToast?.('Dashboard exportado en CSV', 'success')
   }
 
-  const safeFileName = (base) => (base || 'dashboard').replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').toLowerCase()
-
-  const handleExportDashboard = async () => {
+  const handleExportExcel = async () => {
+    if (!canExport) {
+      addToast?.('No hay datos para exportar.', 'info')
+      return
+    }
     try {
-      setExportingPdf(true)
-      const canvas = await getDashboardCanvas()
+      const XLSX = await import('xlsx')
+      const sheet = XLSX.utils.json_to_sheet(exportRows)
+      const workbook = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(workbook, sheet, 'Reporte')
+      XLSX.writeFile(workbook, `dashboard_${Date.now()}.xlsx`)
+      addToast?.('Dashboard exportado en Excel', 'success')
+    } catch (caught) {
+      addToast?.(caught?.message || 'No se pudo exportar Excel.', 'error')
+    }
+  }
+
+  const handleExportPdf = async () => {
+    if (!canExport || !reportRef.current) {
+      addToast?.('No hay reporte visual para exportar.', 'info')
+      return
+    }
+    try {
+      const { default: html2canvas } = await import('html2canvas')
       const { jsPDF } = await import('jspdf')
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-      const pdfWidth = 210
-      const pdfHeight = 297
-      const margin = 8
-      const usableWidth = pdfWidth - margin * 2
-      const usableHeight = pdfHeight - margin * 2
-      const imgWidth = canvas.width
-      const imgHeight = canvas.height
-      const pageHeightPx = Math.floor((usableHeight * imgWidth) / usableWidth)
-      const pageCanvas = document.createElement('canvas')
-      const pageCtx = pageCanvas.getContext('2d')
-      let rendered = 0
-      let page = 0
 
-      while (rendered < imgHeight) {
-        const thisPageHeight = Math.min(pageHeightPx, imgHeight - rendered)
-        pageCanvas.width = imgWidth
-        pageCanvas.height = thisPageHeight
-        pageCtx.clearRect(0, 0, pageCanvas.width, pageCanvas.height)
-        pageCtx.drawImage(canvas, 0, rendered, imgWidth, thisPageHeight, 0, 0, imgWidth, thisPageHeight)
-        const imgData = pageCanvas.toDataURL('image/png')
-        if (page > 0) pdf.addPage()
-        const renderHeightMm = (thisPageHeight * usableWidth) / imgWidth
-        pdf.addImage(imgData, 'PNG', margin, margin, usableWidth, renderHeightMm)
-        rendered += thisPageHeight
-        page += 1
-      }
+      const canvas = await html2canvas(reportRef.current, {
+        backgroundColor: isDark ? '#0B1510' : '#FFFFFF',
+        scale: 2,
+        useCORS: true,
+      })
 
-      pdf.save(`${safeFileName(titles.dashboardTitle)}_${Date.now()}.pdf`)
-      addToast?.('PDF exportado con apariencia fiel al dashboard', 'success', 'Dashboard Studio')
-    } catch (caught) {
-      addToast?.(caught?.message || 'No se pudo exportar PDF', 'error', 'Dashboard Studio')
-    } finally {
-      setExportingPdf(false)
-    }
-  }
-
-  const handleExportPng = async () => {
-    try {
-      setExportingImage(true)
-      const canvas = await getDashboardCanvas()
-      const link = document.createElement('a')
-      link.download = `${safeFileName(titles.dashboardTitle)}_${Date.now()}.png`
-      link.href = canvas.toDataURL('image/png')
-      link.click()
-      addToast?.('Imagen PNG exportada correctamente', 'success', 'Dashboard Studio')
-    } catch (caught) {
-      addToast?.(caught?.message || 'No se pudo exportar la imagen PNG', 'error', 'Dashboard Studio')
-    } finally {
-      setExportingImage(false)
-    }
-  }
-
-  const handlePrintDashboard = async () => {
-    try {
-      setPrinting(true)
-      const canvas = await getDashboardCanvas()
       const imgData = canvas.toDataURL('image/png')
-      const printWindow = window.open('', '', 'height=900,width=1200')
-      if (!printWindow) throw new Error('No se pudo abrir la ventana de impresion.')
-      printWindow.document.write(`<html><head><title>${titles.dashboardTitle}</title><style>html,body{margin:0;padding:0;background:#fff}img{width:100%;height:auto;display:block}@page{size:A4;margin:8mm}</style></head><body><img src="${imgData}" alt="Dashboard" /></body></html>`)
-      printWindow.document.close()
-      setTimeout(() => {
-        printWindow.focus()
-        printWindow.print()
-      }, 300)
+      const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' })
+      const pageWidth = pdf.internal.pageSize.getWidth()
+      const pageHeight = pdf.internal.pageSize.getHeight()
+      const ratio = Math.min(pageWidth / canvas.width, pageHeight / canvas.height)
+      const renderWidth = canvas.width * ratio
+      const renderHeight = canvas.height * ratio
+      const offsetX = (pageWidth - renderWidth) / 2
+      const offsetY = 18
+
+      pdf.addImage(imgData, 'PNG', offsetX, offsetY, renderWidth, renderHeight)
+      pdf.save(`dashboard_${Date.now()}.pdf`)
+      addToast?.('Reporte visual exportado en PDF', 'success')
     } catch (caught) {
-      addToast?.(caught?.message || 'No se pudo imprimir el dashboard', 'error', 'Dashboard Studio')
-    } finally {
-      setPrinting(false)
+      addToast?.(caught?.message || 'No se pudo exportar PDF.', 'error')
     }
   }
-
-  const chart = chartType === 'line'
-    ? <AreaChart data={grouped} title={titles.chartTitle} />
-    : chartType === 'donut'
-      ? <AdvancedDonutChart data={grouped} title={titles.distributionTitle} />
-      : <AdvancedBarChart data={grouped} title={titles.chartTitle} />
 
   if (!open) return null
 
   return (
     <AnimatePresence>
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[75] flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)' }} onClick={(event) => { if (event.target === event.currentTarget) onClose() }}>
-        <motion.div initial={{ scale: 0.96, opacity: 0, y: 16 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.98, opacity: 0, y: 12 }} transition={spring} className="flex h-[90vh] w-full max-w-[1400px] overflow-hidden rounded-[28px] border" style={{ background: G.panel, borderColor: G.border, boxShadow: '0 26px 70px rgba(0,0,0,0.28)' }}>
-          <div className="flex w-[360px] shrink-0 flex-col border-r" style={{ borderColor: G.border, background: '#F3FAF3' }}>
-            <div className="border-b px-6 py-5" style={{ borderColor: G.border, background: 'linear-gradient(135deg, #1F6B35 0%, #2E7D32 100%)' }}>
-              <div className="text-xl font-black text-white">Dashboard Studio</div>
-              <div className="mt-1 text-xs text-white/75">Constructor profesional de reportes, tablas dinámicas y gráficos</div>
-            </div>
-            <div className="space-y-5 overflow-y-auto p-5 text-sm">
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-[75] flex items-start justify-center overflow-y-auto p-4"
+        style={{ background: 'rgba(0,0,0,0.64)', backdropFilter: 'blur(10px)' }}
+        onClick={(event) => { if (event.target === event.currentTarget) onClose?.() }}>
+
+        <motion.div
+          initial={{ opacity: 0, y: 12, scale: 0.985 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 12, scale: 0.985 }}
+          transition={{ duration: 0.18 }}
+          className="w-full rounded-[24px]"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: stackLayout ? 'minmax(0,1fr)' : '360px minmax(0,1fr)',
+            alignItems: 'start',
+            width: 'min(1540px, 100%)',
+            margin: 'auto 0',
+            background: `radial-gradient(circle at 100% 0%, ${isDark ? 'rgba(52,211,153,0.14)' : 'rgba(34,197,94,0.08)'}, transparent 34%), ${colors.bg}`,
+            border: `1px solid ${colors.border}`,
+            overflow: 'hidden',
+          }}>
+
+          <aside style={{ width: '100%', minWidth: 0, maxWidth: '100%', borderRight: stackLayout ? 'none' : `1px solid ${colors.border}`, borderBottom: stackLayout ? `1px solid ${colors.border}` : 'none', background: isDark ? '#0F2019' : '#F5FBF7', overflow: 'visible' }}>
+            <div style={{ position: 'sticky', top: 0, zIndex: 2, padding: 18, borderBottom: `1px solid ${colors.border}`, background: isDark ? 'linear-gradient(140deg,#153126,#10231B)' : 'linear-gradient(140deg,#1B5E20,#2E7D32)', color: '#fff', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14 }}>
               <div>
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: G.dim }}>Fuente</div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={() => { setSourceType('result'); setSourceName('__current_result__') }} className="rounded-xl border px-3 py-2 text-left" style={{ borderColor: sourceType === 'result' ? G.primary : G.border, background: sourceType === 'result' ? G.light : '#fff' }}>Resultado actual</button>
-                  <button onClick={() => { setSourceType('table'); setSourceName(tables[0]?.name || '') }} className="rounded-xl border px-3 py-2 text-left" style={{ borderColor: sourceType === 'table' ? G.primary : G.border, background: sourceType === 'table' ? G.light : '#fff' }}>Tabla cargada</button>
+                <div style={{ fontSize: 24, fontWeight: 800, lineHeight: 1.05 }}>Dashboard Studio</div>
+                <div style={{ fontSize: 13, opacity: 0.9, marginTop: 6 }}>Constructor visual para reportes ejecutivos reales</div>
+              </div>
+              <button onClick={onClose} title="Cerrar" style={{ width: 34, height: 34, borderRadius: 10, border: '1px solid rgba(255,255,255,0.28)', background: 'rgba(255,255,255,0.14)', color: '#fff', fontSize: 20, lineHeight: '30px', cursor: 'pointer' }}>×</button>
+            </div>
+
+            <div style={{ padding: 16, display: 'grid', gap: 16, gridTemplateColumns: stackLayout ? 'repeat(auto-fit,minmax(220px,1fr))' : 'minmax(0,1fr)' }}>
+              <Field label="Titulo del reporte">
+                <input value={reportTitle} onChange={(event) => setReportTitle(event.target.value)} style={{ width: '100%', padding: '10px 12px', borderRadius: 12, border: `1px solid ${colors.border}`, background: isDark ? '#0F2119' : '#fff', color: colors.text, fontSize: 14 }} />
+              </Field>
+
+              <Field label="Subtitulo">
+                <textarea value={reportSubtitle} onChange={(event) => setReportSubtitle(event.target.value)} rows={3} style={{ width: '100%', padding: '10px 12px', borderRadius: 12, border: `1px solid ${colors.border}`, background: isDark ? '#0F2119' : '#fff', color: colors.text, fontSize: 14, resize: 'vertical' }} />
+              </Field>
+
+              <Field label="Fuente de datos">
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <button onClick={() => { setSourceType('result'); setSourceName('__current_result__') }} style={{ padding: '10px 12px', borderRadius: 12, border: `1px solid ${colors.border}`, background: sourceType === 'result' ? colors.panelAlt : (isDark ? '#0F2119' : '#fff'), color: colors.text, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Resultado</button>
+                  <button onClick={() => { setSourceType('table'); setSourceName(tables[0]?.name || '') }} style={{ padding: '10px 12px', borderRadius: 12, border: `1px solid ${colors.border}`, background: sourceType === 'table' ? colors.panelAlt : (isDark ? '#0F2119' : '#fff'), color: colors.text, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Tabla</button>
                 </div>
-                <select value={sourceName} onChange={(event) => setSourceName(event.target.value)} className="mt-2 w-full rounded-xl border px-3 py-2.5 outline-none" style={{ borderColor: G.border, background: '#fff' }}>
+                <Select value={sourceName} onChange={(event) => setSourceName(event.target.value)} colors={colors} isDark={isDark}>
                   {sourceOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                </select>
+                </Select>
+              </Field>
+
+              <Field label="Dimension principal">
+                <Select value={dimension} onChange={(event) => setDimension(event.target.value)} colors={colors} isDark={isDark}>
+                  {columns.map((column) => <option key={column} value={column}>{column}</option>)}
+                </Select>
+              </Field>
+
+              <Field label="Metrica">
+                <Select value={metric} onChange={(event) => setMetric(event.target.value)} colors={colors} isDark={isDark}>
+                  <option value="">Conteo simple</option>
+                  {numericColumns.map((column) => <option key={column} value={column}>{column}</option>)}
+                </Select>
+              </Field>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <Field label="Operacion">
+                  <Select value={agg} onChange={(event) => setAgg(event.target.value)} colors={colors} isDark={isDark}>
+                    <option value="count">Conteo</option>
+                    <option value="sum">Suma</option>
+                    <option value="avg">Promedio</option>
+                    <option value="max">Maximo</option>
+                    <option value="min">Minimo</option>
+                  </Select>
+                </Field>
+                <Field label="Visual principal">
+                  <Select value={chartMode} onChange={(event) => setChartMode(event.target.value)} colors={colors} isDark={isDark}>
+                    <option value="bars">Barras</option>
+                    <option value="line">Tendencia</option>
+                    <option value="donut">Composicion</option>
+                  </Select>
+                </Field>
               </div>
 
-              <div>
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: G.dim }}>Plantilla</div>
-                <div className="grid grid-cols-2 gap-2">
-                  {Object.keys(TEMPLATES).map((key) => (
-                    <button key={key} onClick={() => setTemplateKey(key)} className="rounded-xl border px-3 py-2 text-left capitalize" style={{ borderColor: templateKey === key ? G.primary : G.border, background: templateKey === key ? G.light : '#fff' }}>{key}</button>
-                  ))}
-                </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <Field label="Top visible">
+                  <Select value={String(topN)} onChange={(event) => setTopN(Number(event.target.value))} colors={colors} isDark={isDark}>
+                    {[5, 8, 10, 12, 15].map((value) => <option key={value} value={value}>{value}</option>)}
+                  </Select>
+                </Field>
+                <Field label="Orden">
+                  <Select value={sortDir} onChange={(event) => setSortDir(event.target.value)} colors={colors} isDark={isDark}>
+                    <option value="desc">Mayor a menor</option>
+                    <option value="asc">Menor a mayor</option>
+                  </Select>
+                </Field>
               </div>
 
-              <div>
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: G.dim }}>Tabla dinámica</div>
-                <div className="space-y-2">
-                  <select value={rowField} onChange={(event) => setRowField(event.target.value)} className="w-full rounded-xl border px-3 py-2.5 outline-none" style={{ borderColor: G.border, background: '#fff' }}>
-                    {columns.map((column) => <option key={column} value={column}>Filas: {column}</option>)}
-                  </select>
-                  <select value={columnField} onChange={(event) => setColumnField(event.target.value)} className="w-full rounded-xl border px-3 py-2.5 outline-none" style={{ borderColor: G.border, background: '#fff' }}>
-                    <option value="">Columnas: ninguna</option>
-                    {columns.map((column) => <option key={column} value={column}>Columnas: {column}</option>)}
-                  </select>
-                  <select value={metricField} onChange={(event) => setMetricField(event.target.value)} className="w-full rounded-xl border px-3 py-2.5 outline-none" style={{ borderColor: G.border, background: '#fff' }}>
-                    <option value="">Valor: conteo</option>
-                    {numericColumns.map((column) => <option key={column} value={column}>Valor: {column}</option>)}
-                  </select>
-                  <select value={agg} onChange={(event) => setAgg(event.target.value)} className="w-full rounded-xl border px-3 py-2.5 outline-none" style={{ borderColor: G.border, background: '#fff' }}>
-                    <option value="count">Operacion: Conteo</option>
-                    <option value="sum">Operacion: Suma</option>
-                    <option value="avg">Operacion: Promedio</option>
-                    <option value="max">Operacion: Maximo</option>
-                    <option value="min">Operacion: Minimo</option>
-                  </select>
-                </div>
+              <div style={{ display: 'grid', gap: 8 }}>
+                <button onClick={() => onAskAssistant?.(`Analiza el dashboard actual con dimension ${dimension} y metrica ${metric || 'conteo'}. Dame hallazgos ejecutivos y riesgos.`)} style={{ padding: '11px 12px', borderRadius: 12, border: `1px solid ${colors.border}`, background: isDark ? '#13261E' : '#fff', color: colors.text, fontSize: 13, textAlign: 'left', cursor: 'pointer', fontWeight: 700 }}>IA: hallazgos ejecutivos</button>
+                <button onClick={() => onAskAssistant?.(`Quiero un resumen gerencial del reporte ${reportTitle}. Resume oportunidades, desviaciones y siguientes pasos.`)} style={{ padding: '11px 12px', borderRadius: 12, border: `1px solid ${colors.border}`, background: isDark ? '#13261E' : '#fff', color: colors.text, fontSize: 13, textAlign: 'left', cursor: 'pointer', fontWeight: 700 }}>IA: resumen para gerencia</button>
               </div>
 
-              <div>
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: G.dim }}>Gráfico principal</div>
-                <div className="grid grid-cols-3 gap-2">
-                  {[
-                    { value: 'bar', label: 'Barras' },
-                    { value: 'line', label: 'Línea' },
-                    { value: 'donut', label: 'Donut' },
-                  ].map((option) => (
-                    <button key={option.value} onClick={() => setChartType(option.value)} className="rounded-xl border px-3 py-2" style={{ borderColor: chartType === option.value ? G.primary : G.border, background: chartType === option.value ? G.light : '#fff' }}>{option.label}</button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: G.dim }}>Textos editables</div>
-                <div className="space-y-2">
-                  {[
-                    ['dashboardTitle', 'Título del dashboard'],
-                    ['chartTitle', 'Título gráfico principal'],
-                    ['distributionTitle', 'Título gráfico secundario'],
-                    ['pivotTitle', 'Título tabla dinámica'],
-                  ].map(([key, label]) => (
-                    <input key={key} value={titles[key]} onChange={(event) => setTitles((prev) => ({ ...prev, [key]: event.target.value }))} className="w-full rounded-xl border px-3 py-2.5 outline-none" style={{ borderColor: G.border, background: '#fff' }} placeholder={label} />
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: G.dim }}>Nombres de secciones</div>
-                <div className="space-y-2">
-                  {[['kpiSection', 'Seccion KPIs'], ['chartsSection', 'Seccion graficos'], ['tableSection', 'Seccion tabla']].map(([key, label]) => (
-                    <input key={key} value={labels[key]} onChange={(event) => setLabels((prev) => ({ ...prev, [key]: event.target.value }))} className="w-full rounded-xl border px-3 py-2.5 outline-none" style={{ borderColor: G.border, background: '#fff' }} placeholder={label} />
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: G.dim }}>Parrafos del reporte</div>
-                <div className="space-y-2">
-                  <textarea value={paragraphs.intro} onChange={(event) => setParagraphs((prev) => ({ ...prev, intro: event.target.value }))} className="min-h-[90px] w-full rounded-xl border px-3 py-2.5 outline-none" style={{ borderColor: G.border, background: '#fff' }} placeholder="Parrafo de introduccion" />
-                  <textarea value={paragraphs.analysis} onChange={(event) => setParagraphs((prev) => ({ ...prev, analysis: event.target.value }))} className="min-h-[90px] w-full rounded-xl border px-3 py-2.5 outline-none" style={{ borderColor: G.border, background: '#fff' }} placeholder="Parrafo de analisis" />
-                  <textarea value={paragraphs.notes} onChange={(event) => setParagraphs((prev) => ({ ...prev, notes: event.target.value }))} className="min-h-[90px] w-full rounded-xl border px-3 py-2.5 outline-none" style={{ borderColor: G.border, background: '#fff' }} placeholder="Parrafo de recomendaciones o notas" />
-                </div>
-                <button onClick={applyAutoNarrative} className="mt-2 w-full rounded-xl border px-3 py-2 text-xs font-semibold" style={{ borderColor: '#A5D6A7', color: G.dark, background: '#F1F8F1' }}>
-                  Generar narrativa automatica
-                </button>
-              </div>
-
-              <div>
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: G.dim }}>Copiloto del dashboard</div>
-                <div className="rounded-xl border p-3" style={{ borderColor: '#BBDEFB', background: '#E8F4FD' }}>
-                  <div className="text-[11px] leading-relaxed" style={{ color: '#0D47A1' }}>Envía este contexto al asistente virtual y obtén diagnóstico, resumen ejecutivo o decisiones sugeridas.</div>
-                  <div className="mt-2 grid grid-cols-1 gap-2">
-                    {dashboardAssistantPrompts.map((prompt, idx) => (
-                      <button
-                        key={idx}
-                        onClick={() => onAskAssistant?.(prompt)}
-                        className="rounded-lg border px-3 py-2 text-left text-[11px]"
-                        style={{ borderColor: '#90CAF9', background: '#fff', color: '#0D47A1' }}
-                      >
-                        {idx === 0 ? 'Diagnóstico ejecutivo' : idx === 1 ? 'Resumen para directivos' : 'Decisiones accionables'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <button onClick={handleExportDashboard} disabled={exportingPdf} className="rounded-xl px-4 py-2.5 font-semibold text-white transition-all hover:shadow-lg disabled:opacity-60" style={{ background: 'linear-gradient(135deg, #2E7D32 0%, #0D4F1E 100%)' }}>{exportingPdf ? 'Generando PDF...' : 'Exportar PDF fiel'}</button>
-                <button onClick={handleExportPng} disabled={exportingImage} className="rounded-xl px-4 py-2.5 font-semibold text-white transition-all disabled:opacity-60" style={{ background: 'linear-gradient(135deg, #1B5E20 0%, #2E7D32 100%)' }}>{exportingImage ? 'Generando PNG...' : 'Exportar PNG fiel'}</button>
-                <button onClick={handlePrintDashboard} disabled={printing} className="rounded-xl border px-4 py-2.5 font-semibold transition-all disabled:opacity-60" style={{ borderColor: G.border, color: G.dark, background: '#fff' }}>{printing ? 'Preparando impresion...' : 'Imprimir igual a pantalla'}</button>
-                <button onClick={() => addToast?.('Dashboard listo para presentar', 'success', 'Dashboard Studio')} className="rounded-xl px-4 py-2 font-semibold text-white" style={{ background: 'linear-gradient(135deg, #43A047 0%, #1F6B35 100%)' }}>Aplicar diseño pro</button>
-                <button onClick={onClose} className="rounded-xl border px-4 py-2 font-semibold" style={{ borderColor: G.border, color: G.text }}>Cerrar</button>
+              <div style={{ display: 'grid', gap: 8, alignSelf: 'end' }}>
+                <button onClick={handleExportCsv} disabled={!canExport} style={{ padding: '11px 12px', borderRadius: 12, border: `1px solid ${colors.border}`, background: canExport ? '#fff' : colors.panelSoft, color: canExport ? '#163728' : colors.muted, fontSize: 13, fontWeight: 800, cursor: canExport ? 'pointer' : 'not-allowed' }}>Exportar CSV</button>
+                <button onClick={handleExportExcel} disabled={!canExport} style={{ padding: '11px 12px', borderRadius: 12, border: `1px solid ${colors.border}`, background: canExport ? '#fff' : colors.panelSoft, color: canExport ? '#163728' : colors.muted, fontSize: 13, fontWeight: 800, cursor: canExport ? 'pointer' : 'not-allowed' }}>Exportar Excel</button>
+                <button onClick={handleExportPdf} disabled={!canExport} style={{ padding: '11px 12px', borderRadius: 12, border: 'none', background: canExport ? `linear-gradient(135deg, ${colors.accent}, ${colors.accent2})` : colors.panelSoft, color: canExport ? '#fff' : colors.muted, fontSize: 13, fontWeight: 800, cursor: canExport ? 'pointer' : 'not-allowed' }}>Exportar PDF visual</button>
               </div>
             </div>
-          </div>
+          </aside>
 
-          <div className="flex-1 overflow-y-auto p-6" style={{ background: 'radial-gradient(circle at top right, rgba(76,175,80,0.12), transparent 25%), linear-gradient(180deg, #FDFEFD 0%, #F4F7F4 100%)' }}>
-            {loading && <div className="rounded-2xl border px-4 py-4 text-sm" style={{ background: '#fff', borderColor: G.border, color: G.text }}>Cargando datos del dashboard...</div>}
-            {error && <div className="rounded-2xl border px-4 py-4 text-sm" style={{ background: '#FFF3F3', borderColor: '#FFCDD2', color: '#B71C1C' }}>{error}</div>}
+          <main style={{ minWidth: 0, overflow: 'visible', padding: 18 }}>
+            {loading && <div style={{ fontSize: 16, color: colors.text }}>Cargando dashboard...</div>}
+            {error && <div style={{ fontSize: 15, color: '#DC2626' }}>{error}</div>}
+
             {!loading && !error && (
-              <div className="space-y-6" data-dashboard-export>
-                <div className="grid grid-cols-[1.5fr_1fr] gap-4">
-                  <div className="rounded-[26px] border p-6" style={{ background: 'linear-gradient(135deg, #0D4F1E 0%, #1F6B35 48%, #2E7D32 100%)', borderColor: '#276638', color: '#fff', boxShadow: '0 18px 40px rgba(31,107,53,0.22)' }}>
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <div className="text-xs uppercase tracking-[0.22em] text-white/75">Dashboard Pro</div>
-                        <h1 className="mt-2 text-3xl font-black leading-tight">{titles.dashboardTitle}</h1>
-                        <p className="mt-3 max-w-2xl text-sm text-white/85">{paragraphs.intro}</p>
-                      </div>
-                      <div className="rounded-2xl border px-4 py-3 text-right" style={{ borderColor: 'rgba(255,255,255,0.16)', background: 'rgba(255,255,255,0.08)' }}>
-                        <div className="text-[11px] uppercase tracking-[0.18em] text-white/70">Fuente</div>
-                        <div className="mt-1 text-lg font-bold">{sourceName === '__current_result__' ? 'Resultado actual' : sourceName}</div>
-                      </div>
+              <div ref={reportRef} style={{ display: 'grid', gap: 16, background: isDark ? '#0B1510' : '#fff', borderRadius: 24, padding: 18, minWidth: 0 }}>
+                <section style={{ border: `1px solid ${colors.border}`, borderRadius: 22, background: isDark ? 'linear-gradient(150deg,#153126,#10231B)' : 'linear-gradient(150deg,#FFFFFF,#F4FBF6)', padding: 22 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 18, flexWrap: 'wrap' }}>
+                    <div>
+                      <div style={{ fontSize: 30, fontWeight: 900, color: colors.text, lineHeight: 1.05 }}>{reportTitle}</div>
+                      <div style={{ marginTop: 8, maxWidth: 760, fontSize: 14, lineHeight: 1.6, color: colors.dim }}>{reportSubtitle}</div>
+                    </div>
+                    <div style={{ minWidth: 260, display: 'grid', gap: 6, fontSize: 13, color: colors.dim }}>
+                      <div><strong style={{ color: colors.text }}>Fuente:</strong> {sourceName === '__current_result__' ? 'Resultado actual' : (sourceName || 'Sin fuente')}</div>
+                      <div><strong style={{ color: colors.text }}>Dimension:</strong> {dimension || 'No definida'}</div>
+                      <div><strong style={{ color: colors.text }}>Metrica:</strong> {metricLabel}</div>
                     </div>
                   </div>
-                  <div className="grid gap-4">
-                    <div className="rounded-[26px] border p-5" style={{ background: '#fff', borderColor: G.border }}>
-                      <div className="text-[11px] uppercase tracking-[0.18em]" style={{ color: G.dim }}>Tipo de análisis</div>
-                      <div className="mt-2 text-xl font-black capitalize" style={{ color: G.dark }}>{templateKey}</div>
-                      <div className="mt-2 text-xs" style={{ color: G.dim }}>Puedes ajustar nombres, filas, columnas, métricas y tipo de gráfico.</div>
-                    </div>
-                    <div className="rounded-[26px] border p-5" style={{ background: '#fff', borderColor: G.border }}>
-                      <div className="text-[11px] uppercase tracking-[0.18em]" style={{ color: G.dim }}>Configuración activa</div>
-                      <div className="mt-2 space-y-1 text-sm" style={{ color: G.text }}>
-                        <div>Filas: {rowField || 'Sin definir'}</div>
-                        <div>Columnas: {columnField || 'Sin definir'}</div>
-                        <div>Métrica: {metricField || 'Conteo'}</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                </section>
 
-                <div className="rounded-2xl border p-4" style={{ background: '#F6FBF6', borderColor: '#BFD4BF' }}>
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: G.dim }}>Narrativa ejecutiva</div>
-                  <p className="mt-2 text-sm leading-relaxed" style={{ color: G.text }}>{paragraphs.analysis}</p>
-                  <p className="mt-2 text-xs leading-relaxed" style={{ color: G.dim }}>{paragraphs.notes}</p>
-                </div>
+                <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12 }}>
+                  <KpiCard title="Registros" value={formatNumber(rows.length)} subtitle="filas analizadas" colors={colors} isDark={isDark} />
+                  <KpiCard title="Categorias" value={formatNumber(distinctCount)} subtitle={dimension || 'dimension'} colors={colors} isDark={isDark} />
+                  <KpiCard title="Total visible" value={formatNumber(totalMetric)} subtitle={metricLabel} colors={colors} isDark={isDark} />
+                  <KpiCard title="Promedio" value={formatNumber(avgMetric)} subtitle="por categoria visible" colors={colors} isDark={isDark} />
+                </section>
 
-                <div className="rounded-2xl border p-4" style={{ background: '#fff', borderColor: G.border }}>
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: G.dim }}>Radar de anomalías</div>
-                  <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
-                    {anomalyHighlights.map((f, idx) => (
-                      <div key={idx} className="rounded-lg border px-3 py-2 text-xs" style={{
-                        borderColor: f.level === 'critico' ? '#FFCDD2' : f.level === 'atencion' ? '#FFE082' : '#C8E6C9',
-                        background: f.level === 'critico' ? '#FFF3F3' : f.level === 'atencion' ? '#FFFDE7' : '#F1F8F1',
-                        color: f.level === 'critico' ? '#C62828' : f.level === 'atencion' ? '#E65100' : '#1B5E20',
-                      }}>
-                        {f.level === 'critico' ? '⚠ ' : f.level === 'atencion' ? '◔ ' : '✓ '}{f.text}
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <section style={{ display: 'grid', gridTemplateColumns: stackLayout ? 'minmax(0,1fr)' : 'minmax(0, 1.45fr) minmax(320px, 0.95fr)', gap: 16 }}>
+                  {chartMode === 'line' ? (
+                    <LineTrend data={aggregated} colors={colors} isDark={isDark} />
+                  ) : chartMode === 'donut' ? (
+                    <DonutSummary data={aggregated} colors={colors} isDark={isDark} />
+                  ) : (
+                    <HeroBarChart data={aggregated} colors={colors} isDark={isDark} />
+                  )}
 
-                <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: G.dim }}>{labels.kpiSection}</div>
-                <div className="grid grid-cols-4 gap-4">
-                  {kpis.map((kpi, idx) => (
-                    <KpiCardPro
-                      key={kpi.title}
-                      {...kpi}
-                      trend={idx === 0 ? 12.5 : idx === 1 ? -3.2 : idx === 2 ? 8.7 : 5.3}
-                      color={[G.primary, '#C62828', '#FF9800', '#00897B'][idx]}
-                    />
-                  ))}
-                </div>
-
-                <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: G.dim }}>{labels.chartsSection}</div>
-                <div className="grid grid-cols-[1.7fr_1fr] gap-4">
-                  {chart}
-                  <AdvancedDonutChart data={grouped} title={titles.distributionTitle} />
-                </div>
-
-                <div className="rounded-2xl border p-4" style={{ background: '#fff', borderColor: G.border }}>
-                  <div className="mb-4 flex items-center justify-between">
-                    <div className="text-sm font-bold" style={{ color: G.text }}>{labels.tableSection || titles.pivotTitle}</div>
-                    <div className="text-xs" style={{ color: G.dim }}>Estilo tipo tabla dinámica</div>
-                  </div>
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full border-separate border-spacing-0 text-sm">
-                      <thead>
-                        <tr>
-                          <th className="rounded-tl-xl border px-3 py-2 text-left" style={{ borderColor: G.border, background: G.light, color: G.dark }}>{rowField || 'Fila'}</th>
-                          {Array.from(new Set(grouped.flatMap((item) => Object.keys(item.values)))).slice(0, 6).map((column) => (
-                            <th key={column} className="border px-3 py-2 text-left" style={{ borderColor: G.border, background: G.light, color: G.dark }}>{column}</th>
-                          ))}
-                          <th className="rounded-tr-xl border px-3 py-2 text-left" style={{ borderColor: G.border, background: G.light, color: G.dark }}>Total</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {grouped.slice(0, 8).map((item) => (
-                          <tr key={item.label}>
-                            <td className="border px-3 py-2 font-semibold" style={{ borderColor: G.border, color: G.text }}>{item.label}</td>
-                            {Array.from(new Set(grouped.flatMap((entry) => Object.keys(entry.values)))).slice(0, 6).map((column) => (
-                              <td key={`${item.label}-${column}`} className="border px-3 py-2" style={{ borderColor: G.border, color: G.text }}>{Number(item.values[column] || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}</td>
-                            ))}
-                            <td className="border px-3 py-2 font-bold" style={{ borderColor: G.border, color: G.dark }}>{item.total.toLocaleString(undefined, { maximumFractionDigits: 1 })}</td>
-                          </tr>
+                  <div style={{ display: 'grid', gap: 16 }}>
+                    <DonutSummary data={aggregated} colors={colors} isDark={isDark} />
+                    <div style={{ border: `1px solid ${colors.border}`, borderRadius: 20, background: isDark ? '#13251D' : '#fff', padding: 18 }}>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: colors.text, marginBottom: 12 }}>Lectura ejecutiva</div>
+                      <div style={{ display: 'grid', gap: 10 }}>
+                        {insights.map((insight, index) => (
+                          <div key={index} style={{ padding: '12px 14px', borderRadius: 14, background: isDark ? '#102019' : '#F5FBF7', border: `1px solid ${colors.border}`, fontSize: 13, lineHeight: 1.6, color: colors.text }}>
+                            {insight}
+                          </div>
                         ))}
-                      </tbody>
-                    </table>
+                      </div>
+                    </div>
                   </div>
-                </div>
+                </section>
+
+                <section style={{ display: 'grid', gridTemplateColumns: stackLayout ? 'minmax(0,1fr)' : 'minmax(0, 1.1fr) minmax(320px, 0.9fr)', gap: 16 }}>
+                  <RankingTable data={fullAggregated} dimension={dimension} metricLabel={metricLabel} colors={colors} isDark={isDark} />
+                  <LineTrend data={aggregated} colors={colors} isDark={isDark} />
+                </section>
               </div>
             )}
-          </div>
+          </main>
         </motion.div>
       </motion.div>
     </AnimatePresence>

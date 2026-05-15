@@ -144,3 +144,34 @@ export async function reorderTableColumns(tableName, orderedColumns = []) {
   await c.query(`DROP TABLE "${tableName}"`)
   await c.query(`ALTER TABLE "${tmp}" RENAME TO "${tableName}"`)
 }
+
+/**
+ * Drop one or more columns safely by rebuilding the table with the remaining projection.
+ */
+export async function dropColumns(tableName, columnsToDrop = []) {
+  const c = await getConnection()
+  const result = await c.query(`DESCRIBE "${tableName}"`)
+  const existing = result.toArray().map(row => row.column_name)
+  if (!existing.length) return
+
+  const dropSet = new Set((columnsToDrop || []).filter(col => existing.includes(col)))
+  if (!dropSet.size) return
+
+  const projectionColumns = existing.filter(col => !dropSet.has(col))
+  if (!projectionColumns.length) {
+    throw new Error('No se pueden eliminar todas las columnas de una tabla.')
+  }
+
+  const projection = projectionColumns.map(col => `"${col}"`).join(', ')
+  const tmp = `__tmp_dropcols_${Date.now()}`
+
+  await c.query(`CREATE TABLE "${tmp}" AS SELECT ${projection} FROM "${tableName}"`)
+  await c.query(`DROP TABLE "${tableName}"`)
+  await c.query(`ALTER TABLE "${tmp}" RENAME TO "${tableName}"`)
+
+  const updated = await c.query(`DESCRIBE "${tableName}"`)
+  return updated.toArray().map(row => ({
+    name: row.column_name,
+    type: row.column_type,
+  }))
+}
