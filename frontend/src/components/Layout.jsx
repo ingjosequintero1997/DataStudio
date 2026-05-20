@@ -2,9 +2,9 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { signOut } from 'firebase/auth'
 import { motion, AnimatePresence } from 'framer-motion'
 import { auth } from '../firebase'
-import { initDuckDB, executeQuery, dropTable, registerCSVAsTable, reorderTableColumns } from '../lib/duckdb'
+import { initDuckDB, executeQuery, dropColumns, dropTable, registerCSVAsTable, reorderTableColumns } from '../lib/duckdb'
 import { loadTablesMeta, loadTableBuffer, deleteTable } from '../lib/indexeddb'
-import { parseCommand } from '../lib/nlp'
+import { parseCommand, shouldPreferLocalCommand } from '../lib/nlp'
 import { rowsToDelimitedText } from '../lib/resultTableService'
 import { runAiTask, isAiRuntimeConfigured } from '../services/ai/aiOrchestratorClient'
 import { ToastContainer } from './Toast'
@@ -187,7 +187,7 @@ export default function Layout({ user, theme = 'light', onToggleTheme }) {
   const [toasts, setToasts] = useState([])
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [newQuerySignal, setNewQuerySignal] = useState(0)
-  const [sqlEditorHeightPct, setSqlEditorHeightPct] = useState(30)
+  const [sqlEditorHeightPct, setSqlEditorHeightPct] = useState(16)
   const [isResizingSql, setIsResizingSql] = useState(false)
   const [sqlConversationHistory, setSqlConversationHistory] = useState([])
   const [sqlRecentQueries, setSqlRecentQueries] = useState([])
@@ -257,7 +257,7 @@ export default function Layout({ user, theme = 'light', onToggleTheme }) {
       if (!container) return
       const rect = container.getBoundingClientRect()
       const next = ((e.clientY - rect.top) / rect.height) * 100
-      const clamped = Math.max(18, Math.min(72, next))
+      const clamped = Math.max(10, Math.min(68, next))
       setSqlEditorHeightPct(clamped)
     }
 
@@ -412,21 +412,59 @@ export default function Layout({ user, theme = 'light', onToggleTheme }) {
     try {
       let sql = null
       let explanation = ''
+      const preferLocal = shouldPreferLocalCommand(clean)
 
-      if (isAiRuntimeConfigured()) {
+      if (preferLocal) {
+        const parsed = parseCommand(clean, tables, { activeTableName: selectedTable })
+        if (parsed?.error) {
+          const contextualError = new Error(parsed.error)
+          contextualError.contextual = {
+            level: 'warning',
+            title: 'No pude interpretar la instruccion',
+            actionHint: 'Escribe una acción con tabla y campo. Ejemplo: "filtra resultado_1 donde ciudad sea Bogotá".',
+          }
+          throw contextualError
+        }
+        if (parsed?.action === 'reorderColumns') {
+          await reorderTableColumns(parsed.tableName, parsed.orderedColumns || [])
+          const preview = await executeQuery(`SELECT * FROM "${parsed.tableName}" LIMIT 300;`)
+          setSqlResult({ ...preview, duration: '0.000' })
+          setSelectedTable(parsed.tableName)
+          setStatusMessage('Columnas reordenadas en ' + parsed.tableName)
+          addToast(parsed.description || 'Columnas reordenadas', 'success', 'SQL Pro IA')
+          return
+        }
+        if (parsed?.action === 'dropColumns') {
+          await dropColumns(parsed.tableName, parsed.columnNames || [])
+          const preview = await executeQuery(`SELECT * FROM "${parsed.tableName}" LIMIT 300;`)
+          setSqlResult({ ...preview, duration: '0.000' })
+          setSelectedTable(parsed.tableName)
+          setStatusMessage('Columnas eliminadas en ' + parsed.tableName)
+          addToast(parsed.description || 'Columnas eliminadas', 'success', 'SQL Pro IA')
+          return
+        }
+        sql = parsed?.sql || null
+        explanation = parsed?.description || ''
+      }
+
+      if (!sql && isAiRuntimeConfigured()) {
         const ai = await runAiTask({
           task: 'sql.generate',
-          prompt: clean,
+          prompt: `Tabla activa: ${selectedTable || 'sin seleccionar'}\nInstrucción del usuario: ${clean}`,
           tables,
           history: sqlConversationHistory,
-          context: aiContextPayload,
+          context: {
+            ...aiContextPayload,
+            activeTableName: selectedTable,
+            userIntent: clean,
+          },
         })
         sql = ai?.sql
         explanation = ai?.explanation || ''
       }
 
       if (!sql) {
-        const parsed = parseCommand(clean, tables)
+        const parsed = parseCommand(clean, tables, { activeTableName: selectedTable })
         if (parsed?.error) {
           const contextualError = new Error(parsed.error)
           contextualError.contextual = {
@@ -503,7 +541,7 @@ export default function Layout({ user, theme = 'light', onToggleTheme }) {
     } finally {
       setSqlBusy(false)
     }
-  }, [tables, addToast, sqlConversationHistory, aiContextPayload])
+  }, [tables, addToast, sqlConversationHistory, aiContextPayload, selectedTable])
 
   return (
     <div className="flex flex-col h-full select-none" style={{ background: T.appBg, color: T.text }}>
@@ -748,10 +786,25 @@ export default function Layout({ user, theme = 'light', onToggleTheme }) {
                       style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${T.border}`, background: theme === 'dark' ? '#12271C' : '#fff', color: T.text, fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer' }}>
                       Salir de SQL Pro
                     </button>
+                    <button
+                      onClick={() => setSqlEditorHeightPct(8)}
+                      style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${T.border}`, background: theme === 'dark' ? '#12271C' : '#fff', color: T.text, fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer' }}>
+                      Solo resultados
+                    </button>
+                    <button
+                      onClick={() => setSqlEditorHeightPct(12)}
+                      style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${T.border}`, background: theme === 'dark' ? '#12271C' : '#fff', color: T.text, fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer' }}>
+                      Tabla gigante
+                    </button>
+                    <button
+                      onClick={() => setSqlEditorHeightPct(22)}
+                      style={{ padding: '8px 12px', borderRadius: 10, border: `1px solid ${T.border}`, background: theme === 'dark' ? '#12271C' : '#fff', color: T.text, fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer' }}>
+                      Balanceado
+                    </button>
                   </div>
                 </div>
 
-                <div style={{ height: `${sqlEditorHeightPct}%`, minHeight: 170, borderBottom: `1px solid ${T.border}`, boxShadow: theme === 'dark' ? '0 10px 24px rgba(0,0,0,0.25)' : 'none' }}>
+                <div style={{ height: `${sqlEditorHeightPct}%`, minHeight: 96, borderBottom: `1px solid ${T.border}`, boxShadow: theme === 'dark' ? '0 10px 24px rgba(0,0,0,0.25)' : 'none' }}>
                   <CommandBar
                     onExecute={(cmd) => runNaturalQuery(cmd)}
                     isExecuting={sqlBusy}
@@ -855,10 +908,24 @@ export default function Layout({ user, theme = 'light', onToggleTheme }) {
               window.dispatchEvent(new CustomEvent('ds-chat-prompt', { detail: { prompt } }))
             }}
             onResult={async (res) => {
+              const updatedTableMeta = res?.crossContext?.updatedTableMeta
+              if (updatedTableMeta?.name) {
+                setTables((prev) => {
+                  const next = [...prev.filter((table) => table.name !== updatedTableMeta.name), updatedTableMeta]
+                  return next
+                })
+                setSelectedTable(updatedTableMeta.name)
+              }
               setCrossResult(res)
               setActiveModule('cross')
               setStatusMessage('Cruce ejecutado — ' + res.rowCount?.toLocaleString() + ' fila(s)')
-              addToast(res.rowCount?.toLocaleString() + ' filas', 'success', 'Cruce completado')
+              addToast(
+                res.rowCount?.toLocaleString() + ' filas',
+                'success',
+                updatedTableMeta?.name
+                  ? `Cruce aplicado en "${updatedTableMeta.name}"`
+                  : 'Cruce completado'
+              )
             }}
           />
         )}

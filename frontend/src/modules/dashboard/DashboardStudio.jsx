@@ -71,6 +71,19 @@ function formatNumber(value) {
   return Number(value || 0).toLocaleString('es-ES', { maximumFractionDigits: 2 })
 }
 
+function formatTimestamp(date = new Date()) {
+  const pad = (v) => String(v).padStart(2, '0')
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+}
+
+function sanitizeFilePart(value = '') {
+  return String(value || '')
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_\-]/g, '')
+    .slice(0, 42) || 'dashboard'
+}
+
 function buildNarrative(data, metricLabel) {
   if (!data.length) return []
   const total = data.reduce((acc, item) => acc + Number(item.total || 0), 0)
@@ -380,6 +393,12 @@ export default function DashboardStudio({ open, onClose, tables, result, addToas
   const canExport = exportRows.length > 0
   const stackLayout = isCompactViewport
 
+  const exportBaseName = useMemo(() => {
+    const sourceLabel = sourceName === '__current_result__' ? 'resultado_actual' : (sourceName || 'dashboard')
+    const safeSource = sanitizeFilePart(sourceLabel)
+    return `${safeSource}_${formatTimestamp()}`
+  }, [sourceName])
+
   const handleExportCsv = () => {
     if (!canExport) {
       addToast?.('No hay datos para exportar.', 'info')
@@ -394,24 +413,156 @@ export default function DashboardStudio({ open, onClose, tables, result, addToas
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = url
-    anchor.download = `dashboard_${Date.now()}.csv`
+    anchor.download = `${exportBaseName}_reporte.csv`
     anchor.click()
     URL.revokeObjectURL(url)
     addToast?.('Dashboard exportado en CSV', 'success')
   }
 
   const handleExportExcel = async () => {
-    if (!canExport) {
+    if (!canExport || !reportRef.current) {
       addToast?.('No hay datos para exportar.', 'info')
       return
     }
     try {
-      const XLSX = await import('xlsx')
-      const sheet = XLSX.utils.json_to_sheet(exportRows)
-      const workbook = XLSX.utils.book_new()
-      XLSX.utils.book_append_sheet(workbook, sheet, 'Reporte')
-      XLSX.writeFile(workbook, `dashboard_${Date.now()}.xlsx`)
-      addToast?.('Dashboard exportado en Excel', 'success')
+      const [{ default: ExcelJS }, { default: html2canvas }] = await Promise.all([
+        import('exceljs'),
+        import('html2canvas'),
+      ])
+
+      const workbook = new ExcelJS.Workbook()
+      workbook.creator = 'NERV Dashboard Studio'
+      workbook.created = new Date()
+      workbook.modified = new Date()
+
+      const summarySheet = workbook.addWorksheet('Resumen Ejecutivo', {
+        views: [{ showGridLines: false }],
+      })
+      summarySheet.columns = [
+        { width: 28 },
+        { width: 28 },
+        { width: 28 },
+        { width: 28 },
+      ]
+
+      summarySheet.mergeCells('A1:D1')
+      summarySheet.getCell('A1').value = reportTitle || 'Reporte Ejecutivo'
+      summarySheet.getCell('A1').font = { size: 20, bold: true, color: { argb: 'FF14532D' } }
+
+      summarySheet.mergeCells('A2:D2')
+      summarySheet.getCell('A2').value = reportSubtitle || 'Dashboard ejecutivo exportado desde NERV'
+      summarySheet.getCell('A2').font = { size: 12, color: { argb: 'FF4B5563' } }
+
+      summarySheet.getCell('A4').value = 'Fuente'
+      summarySheet.getCell('B4').value = sourceName === '__current_result__' ? 'Resultado actual' : (sourceName || 'Sin fuente')
+      summarySheet.getCell('C4').value = 'Dimension'
+      summarySheet.getCell('D4').value = dimension || 'No definida'
+      summarySheet.getCell('A5').value = 'Metrica'
+      summarySheet.getCell('B5').value = metricLabel
+      summarySheet.getCell('C5').value = 'Fecha'
+      summarySheet.getCell('D5').value = new Date().toLocaleString('es-ES')
+
+      ;['A4', 'C4', 'A5', 'C5'].forEach((ref) => {
+        summarySheet.getCell(ref).font = { bold: true, color: { argb: 'FF166534' } }
+      })
+
+      const kpiRows = [
+        ['Registros analizados', rows.length],
+        ['Categorias detectadas', distinctCount],
+        ['Total visible', totalMetric],
+        ['Promedio visible', avgMetric],
+      ]
+      summarySheet.getCell('A7').value = 'KPIs'
+      summarySheet.getCell('A7').font = { bold: true, size: 13, color: { argb: 'FF14532D' } }
+
+      kpiRows.forEach(([label, value], index) => {
+        const row = 8 + index
+        summarySheet.getCell(`A${row}`).value = label
+        summarySheet.getCell(`A${row}`).font = { bold: true, color: { argb: 'FF166534' } }
+        summarySheet.getCell(`B${row}`).value = Number(value || 0)
+        summarySheet.getCell(`B${row}`).numFmt = '#,##0.00'
+      })
+
+      summarySheet.getCell('A13').value = 'Insights Ejecutivos'
+      summarySheet.getCell('A13').font = { bold: true, size: 13, color: { argb: 'FF14532D' } }
+      ;(insights.length ? insights : ['Sin insights disponibles para la configuracion actual.']).forEach((item, index) => {
+        const row = 14 + index
+        summarySheet.mergeCells(`A${row}:D${row}`)
+        summarySheet.getCell(`A${row}`).value = `• ${item}`
+        summarySheet.getCell(`A${row}`).alignment = { vertical: 'top', wrapText: true }
+        summarySheet.getRow(row).height = 24
+      })
+
+      const dataSheet = workbook.addWorksheet('Tabla Analitica')
+      dataSheet.columns = [
+        { header: dimension || 'dimension', key: 'dimension', width: 44 },
+        { header: 'valor', key: 'valor', width: 20 },
+        { header: 'operacion', key: 'operacion', width: 16 },
+        { header: 'metrica', key: 'metrica', width: 24 },
+      ]
+      exportRows.forEach((row) => dataSheet.addRow(row))
+      dataSheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } }
+      dataSheet.getRow(1).fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF166534' },
+      }
+
+      dataSheet.eachRow((row, rowNumber) => {
+        row.eachCell((cell) => {
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+            left: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+            bottom: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+            right: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+          }
+          if (rowNumber > 1 && rowNumber % 2 === 0) {
+            cell.fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: 'FFF7FBF7' },
+            }
+          }
+        })
+      })
+
+      const visualSheet = workbook.addWorksheet('Dashboard Visual', {
+        views: [{ showGridLines: false }],
+      })
+      visualSheet.columns = [{ width: 120 }]
+      visualSheet.getCell('A1').value = 'Vista Visual del Dashboard'
+      visualSheet.getCell('A1').font = { bold: true, size: 16, color: { argb: 'FF14532D' } }
+
+      const canvas = await html2canvas(reportRef.current, {
+        backgroundColor: isDark ? '#0B1510' : '#FFFFFF',
+        scale: 1.7,
+        useCORS: true,
+      })
+      const imageId = workbook.addImage({
+        base64: canvas.toDataURL('image/png'),
+        extension: 'png',
+      })
+
+      const maxWidth = 1100
+      const ratio = canvas.width > maxWidth ? maxWidth / canvas.width : 1
+      visualSheet.addImage(imageId, {
+        tl: { col: 0, row: 2 },
+        ext: {
+          width: Math.round(canvas.width * ratio),
+          height: Math.round(canvas.height * ratio),
+        },
+      })
+
+      const buffer = await workbook.xlsx.writeBuffer()
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `${exportBaseName}_reporte_ejecutivo.xlsx`
+      anchor.click()
+      URL.revokeObjectURL(url)
+
+      addToast?.('Reporte ejecutivo exportado en Excel', 'success')
     } catch (caught) {
       addToast?.(caught?.message || 'No se pudo exportar Excel.', 'error')
     }
@@ -443,7 +594,7 @@ export default function DashboardStudio({ open, onClose, tables, result, addToas
       const offsetY = 18
 
       pdf.addImage(imgData, 'PNG', offsetX, offsetY, renderWidth, renderHeight)
-      pdf.save(`dashboard_${Date.now()}.pdf`)
+      pdf.save(`${exportBaseName}_reporte_visual.pdf`)
       addToast?.('Reporte visual exportado en PDF', 'success')
     } catch (caught) {
       addToast?.(caught?.message || 'No se pudo exportar PDF.', 'error')

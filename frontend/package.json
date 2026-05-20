@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@duckdb/duckdb-wasm": "^1.29.0",
+    "exceljs": "^4.4.0",
     "@monaco-editor/react": "^4.6.0",
     "apache-arrow": "^16.1.0",
     "firebase": "^10.12.2",

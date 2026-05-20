@@ -135,17 +135,39 @@ function CellValue({ value }) {
 export default function ResultsTable({ result, error, isExecuting, visibleColumns, onExport, onExportExcel, onClear, theme = 'light', density = 'default' }) {
   const isDark = theme === 'dark'
   const isLarge = density === 'large'
-  const ROW_HEIGHT = isLarge ? 34 : BASE_ROW_HEIGHT
-  const HEADER_HEIGHT = isLarge ? 40 : BASE_HEADER_HEIGHT
-  const bodyFontSize = isLarge ? '0.84rem' : '0.76rem'
-  const headerFontSize = isLarge ? '0.78rem' : '0.7rem'
-  const indexFontSize = isLarge ? '0.74rem' : '0.65rem'
-  const summaryFontSize = isLarge ? '0.76rem' : '0.68rem'
-  const panelBg = isDark ? '#0F1A14' : '#fff'
-  const rowA = isDark ? '#102019' : '#FAFCFA'
-  const rowB = isDark ? '#0E1A14' : '#fff'
-  const rowHover = isDark ? 'rgba(16,185,129,0.12)' : 'rgba(67,160,71,0.07)'
-  const line = isDark ? 'rgba(16,185,129,0.18)' : '#E6EFE6'
+  const sqlServerSkin = isLarge
+  const ROW_HEIGHT = sqlServerSkin ? 32 : (isLarge ? 48 : BASE_ROW_HEIGHT)
+  const HEADER_HEIGHT = sqlServerSkin ? 34 : (isLarge ? 52 : BASE_HEADER_HEIGHT)
+  const bodyFontSize = sqlServerSkin ? '0.82rem' : (isLarge ? '0.92rem' : '0.76rem')
+  const headerFontSize = sqlServerSkin ? '0.78rem' : (isLarge ? '0.86rem' : '0.7rem')
+  const indexFontSize = sqlServerSkin ? '0.72rem' : (isLarge ? '0.8rem' : '0.65rem')
+  const summaryFontSize = sqlServerSkin ? '0.76rem' : (isLarge ? '0.84rem' : '0.68rem')
+  const controlFontSize = sqlServerSkin ? '0.76rem' : (isLarge ? '0.82rem' : '0.72rem')
+  const indexColWidth = sqlServerSkin ? 44 : (isLarge ? 56 : 44)
+
+  const SSMS = {
+    panelBg: '#FFFFFF',
+    rowA: '#FFFFFF',
+    rowB: '#FCFCFC',
+    rowHover: '#EEF4FF',
+    line: '#D8D8D8',
+    headerBg: '#F3F3F3',
+    headerText: '#222222',
+    controlBg: '#FFFFFF',
+    controlBarBg: '#F7F7F7',
+    controlText: '#2E2E2E',
+    summaryBg: '#F6F6F6',
+    summaryText: '#444444',
+    tabBg: '#EDEDED',
+    tabText: '#333333',
+    tabAccent: '#0078D4',
+  }
+
+  const panelBg = sqlServerSkin ? SSMS.panelBg : (isDark ? '#0F1A14' : '#fff')
+  const rowA = sqlServerSkin ? SSMS.rowA : (isDark ? '#102019' : '#FAFCFA')
+  const rowB = sqlServerSkin ? SSMS.rowB : (isDark ? '#0E1A14' : '#fff')
+  const rowHover = sqlServerSkin ? SSMS.rowHover : (isDark ? 'rgba(16,185,129,0.12)' : 'rgba(67,160,71,0.07)')
+  const line = sqlServerSkin ? SSMS.line : (isDark ? 'rgba(16,185,129,0.18)' : '#E6EFE6')
   const displayColumns = visibleColumns?.length ? visibleColumns : (result?.columns || [])
   const errorState = normalizeErrorState(error)
   const [searchTerm, setSearchTerm] = useState('')
@@ -213,14 +235,18 @@ export default function ResultsTable({ result, error, isExecuting, visibleColumn
           if (val !== null && val !== undefined) max = Math.max(max, String(val).length)
         }
       }
-      widths[col] = Math.max(80, Math.min(300, max * 7.5 + 24))
+      widths[col] = sqlServerSkin
+        ? Math.max(120, Math.min(520, max * 8.3 + 24))
+        : isLarge
+        ? Math.max(130, Math.min(420, max * 9.8 + 36))
+        : Math.max(80, Math.min(300, max * 7.5 + 24))
     }
     return widths
-  }, [pagedRows, displayColumns])
+  }, [pagedRows, displayColumns, isLarge, sqlServerSkin])
 
   const totalWidth = useMemo(
-    () => displayColumns.reduce((s, c) => s + (colWidths[c] || 100), 44),
-    [displayColumns, colWidths]
+    () => displayColumns.reduce((s, c) => s + (colWidths[c] || 100), indexColWidth),
+    [displayColumns, colWidths, indexColWidth]
   )
 
   if (errorState) {
@@ -308,7 +334,7 @@ export default function ResultsTable({ result, error, isExecuting, visibleColumn
         {...{ style: { ...style, width: totalWidth, display: 'flex', alignItems: 'center', background: isEven ? rowA : rowB, borderBottom: `1px solid ${line}` } }}
       >
         <div
-          style={{ width: 44, height: ROW_HEIGHT, lineHeight: ROW_HEIGHT + 'px', color: G.dim, fontSize: indexFontSize, textAlign: 'right', paddingRight: 8, borderRight: `1px solid ${G.border}`, flexShrink: 0, userSelect: 'none' }}
+          style={{ width: indexColWidth, height: ROW_HEIGHT, lineHeight: ROW_HEIGHT + 'px', color: G.dim, fontSize: indexFontSize, textAlign: 'right', paddingRight: isLarge ? 10 : 8, borderRight: `1px solid ${G.border}`, flexShrink: 0, userSelect: 'none' }}
         >
           {absoluteIndex + 1}
         </div>
@@ -327,7 +353,7 @@ export default function ResultsTable({ result, error, isExecuting, visibleColumn
             return (
           <div
             key={col}
-            style={{ width: colWidths[col] || 100, height: ROW_HEIGHT, lineHeight: ROW_HEIGHT + 'px', borderRight: `1px solid ${G.border}`, flexShrink: 0, overflow: 'hidden', padding: isLarge ? '0 10px' : '0 8px', fontSize: bodyFontSize, fontFamily: 'JetBrains Mono, monospace', background: glow }}
+            style={{ width: colWidths[col] || 100, height: ROW_HEIGHT, lineHeight: ROW_HEIGHT + 'px', borderRight: `1px solid ${line}`, flexShrink: 0, overflow: 'hidden', padding: isLarge ? '0 10px' : '0 8px', fontSize: bodyFontSize, fontFamily: sqlServerSkin ? 'Consolas, "Courier New", monospace' : 'JetBrains Mono, monospace', background: glow }}
             title={row[col] !== null && row[col] !== undefined ? String(row[col]) : 'NULL'}
           >
             <CellValue value={row[col]} />
@@ -341,9 +367,9 @@ export default function ResultsTable({ result, error, isExecuting, visibleColumn
 
   return (
     <div className="flex flex-col h-full" style={{ background: panelBg }}>
-      <TabBar rowCount={rowCount} duration={duration} hasCross={!!crossContext} canClear onClear={onClear} theme={theme} />
+      <TabBar rowCount={rowCount} duration={duration} hasCross={!!crossContext} canClear onClear={onClear} theme={theme} sqlServerSkin={sqlServerSkin} />
       <CrossBanner ctx={crossContext} onExport={onExport} onExportExcel={onExportExcel} theme={theme} />
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderBottom: `1px solid ${line}`, background: isDark ? '#102019' : '#F7FBF7', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: sqlServerSkin ? '6px 10px' : (isLarge ? '10px 14px' : '6px 12px'), borderBottom: `1px solid ${line}`, background: sqlServerSkin ? SSMS.controlBarBg : (isDark ? '#102019' : '#F7FBF7'), flexWrap: 'wrap' }}>
         <input
           value={searchTerm}
           onChange={(e) => { setSearchTerm(e.target.value); setPage(1) }}
@@ -351,24 +377,24 @@ export default function ResultsTable({ result, error, isExecuting, visibleColumn
           style={{
             minWidth: 220,
             flex: '1 1 260px',
-            padding: '6px 10px',
-            borderRadius: 8,
+            padding: sqlServerSkin ? '6px 10px' : (isLarge ? '10px 12px' : '6px 10px'),
+            borderRadius: sqlServerSkin ? 4 : 8,
             border: `1px solid ${G.border}`,
-            background: isDark ? '#0F1A14' : '#fff',
-            color: isDark ? '#E2F5E2' : G.text,
-            fontSize: '0.74rem',
-            fontFamily: 'Inter,sans-serif',
+            background: sqlServerSkin ? SSMS.controlBg : (isDark ? '#0F1A14' : '#fff'),
+            color: sqlServerSkin ? SSMS.controlText : (isDark ? '#E2F5E2' : G.text),
+            fontSize: sqlServerSkin ? '0.78rem' : (isLarge ? '0.86rem' : '0.74rem'),
+            fontFamily: sqlServerSkin ? 'Consolas, "Courier New", monospace' : 'Inter,sans-serif',
           }}
         />
         <button
           onClick={() => { setSortBy(null); setSortDir('asc') }}
-          style={{ padding: '6px 10px', borderRadius: 8, border: `1px solid ${G.border}`, background: isDark ? '#163326' : '#fff', color: isDark ? '#E2F5E2' : G.text2, fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer' }}>
+          style={{ padding: sqlServerSkin ? '6px 10px' : (isLarge ? '9px 12px' : '6px 10px'), borderRadius: sqlServerSkin ? 4 : 8, border: `1px solid ${sqlServerSkin ? SSMS.line : G.border}`, background: sqlServerSkin ? SSMS.controlBg : (isDark ? '#163326' : '#fff'), color: sqlServerSkin ? SSMS.controlText : (isDark ? '#E2F5E2' : G.text2), fontSize: controlFontSize, fontWeight: 700, cursor: 'pointer' }}>
           Limpiar orden
         </button>
         <select
           value={pageSize}
           onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1) }}
-          style={{ padding: '6px 8px', borderRadius: 8, border: `1px solid ${G.border}`, background: isDark ? '#163326' : '#fff', color: isDark ? '#E2F5E2' : G.text2, fontSize: '0.72rem', fontWeight: 700 }}>
+          style={{ padding: sqlServerSkin ? '6px 8px' : (isLarge ? '9px 10px' : '6px 8px'), borderRadius: sqlServerSkin ? 4 : 8, border: `1px solid ${sqlServerSkin ? SSMS.line : G.border}`, background: sqlServerSkin ? SSMS.controlBg : (isDark ? '#163326' : '#fff'), color: sqlServerSkin ? SSMS.controlText : (isDark ? '#E2F5E2' : G.text2), fontSize: controlFontSize, fontWeight: 700 }}>
           {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n} por página</option>)}
         </select>
       </div>
@@ -388,10 +414,10 @@ export default function ResultsTable({ result, error, isExecuting, visibleColumn
               >
               <div style={{ width: effectiveWidth, height }}>
                   <div
-                    style={{ height: HEADER_HEIGHT, width: effectiveWidth, position: 'sticky', top: 0, zIndex: 2, display: 'flex', background: G.dark, borderBottom: `1px solid ${G.primary}` }}
+                    style={{ height: HEADER_HEIGHT, width: effectiveWidth, position: 'sticky', top: 0, zIndex: 2, display: 'flex', background: sqlServerSkin ? SSMS.headerBg : G.dark, borderBottom: `1px solid ${sqlServerSkin ? SSMS.line : G.primary}` }}
                   >
                     <div
-                      style={{ width: 44, color: 'rgba(255,255,255,0.5)', fontSize: indexFontSize, fontWeight: 700, padding: '0 8px', borderRight: '1px solid rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', flexShrink: 0 }}
+                      style={{ width: indexColWidth, color: sqlServerSkin ? '#4A4A4A' : 'rgba(255,255,255,0.6)', fontSize: indexFontSize, fontWeight: 700, padding: isLarge ? '0 12px' : '0 8px', borderRight: sqlServerSkin ? `1px solid ${SSMS.line}` : '1px solid rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', flexShrink: 0 }}
                     >
                       #
                     </div>
@@ -406,7 +432,7 @@ export default function ResultsTable({ result, error, isExecuting, visibleColumn
                             setSortDir('asc')
                           }
                         }}
-                        style={{ width: colWidths[col] || 100, fontSize: headerFontSize, fontWeight: 700, padding: isLarge ? '0 10px' : '0 8px', borderRight: '1px solid rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', flexShrink: 0, overflow: 'hidden', color: 'white', fontFamily: 'Inter,sans-serif', letterSpacing: '0.02em', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                        style={{ width: colWidths[col] || 100, fontSize: headerFontSize, fontWeight: 700, padding: isLarge ? '0 12px' : '0 8px', borderRight: sqlServerSkin ? `1px solid ${SSMS.line}` : '1px solid rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', flexShrink: 0, overflow: 'hidden', color: sqlServerSkin ? SSMS.headerText : 'white', fontFamily: sqlServerSkin ? 'Segoe UI, Tahoma, sans-serif' : 'Inter,sans-serif', letterSpacing: sqlServerSkin ? '0' : '0.02em', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                         title={col}
                       >
                         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{col}</span>
@@ -426,25 +452,25 @@ export default function ResultsTable({ result, error, isExecuting, visibleColumn
           }}
         </AutoSizer>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '5px 16px', background: G.light, borderTop: `1px solid ${G.border}`, flexShrink: 0 }}>
-        <span style={{ color: G.text2, fontSize: summaryFontSize, fontFamily: 'Inter,sans-serif' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: sqlServerSkin ? '6px 12px' : (isLarge ? '10px 16px' : '5px 16px'), background: sqlServerSkin ? SSMS.summaryBg : G.light, borderTop: `1px solid ${sqlServerSkin ? SSMS.line : G.border}`, flexShrink: 0 }}>
+        <span style={{ color: sqlServerSkin ? SSMS.summaryText : G.text2, fontSize: summaryFontSize, fontFamily: sqlServerSkin ? 'Segoe UI, Tahoma, sans-serif' : 'Inter,sans-serif' }}>
           {displayColumns.length} columna(s) · {searchTerm ? `${sortedRows.length.toLocaleString()} filtrados` : `${rowCount.toLocaleString()} total`} · Página {safePage}/{pageCount}
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage <= 1} style={{ padding: '3px 8px', borderRadius: 6, border: `1px solid ${G.border}`, background: '#fff', color: G.text2, fontSize: '0.7rem', cursor: safePage <= 1 ? 'not-allowed' : 'pointer', opacity: safePage <= 1 ? 0.5 : 1 }}>Anterior</button>
-          <button onClick={() => setPage((p) => Math.min(pageCount, p + 1))} disabled={safePage >= pageCount} style={{ padding: '3px 8px', borderRadius: 6, border: `1px solid ${G.border}`, background: '#fff', color: G.text2, fontSize: '0.7rem', cursor: safePage >= pageCount ? 'not-allowed' : 'pointer', opacity: safePage >= pageCount ? 0.5 : 1 }}>Siguiente</button>
-          <span style={{ color: G.dim, fontSize: summaryFontSize, fontFamily: 'Inter,sans-serif' }}>⏱ {duration}s</span>
+          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage <= 1} style={{ padding: sqlServerSkin ? '5px 10px' : (isLarge ? '7px 12px' : '3px 8px'), borderRadius: sqlServerSkin ? 4 : 6, border: `1px solid ${sqlServerSkin ? SSMS.line : G.border}`, background: '#fff', color: sqlServerSkin ? SSMS.summaryText : G.text2, fontSize: controlFontSize, cursor: safePage <= 1 ? 'not-allowed' : 'pointer', opacity: safePage <= 1 ? 0.5 : 1 }}>Anterior</button>
+          <button onClick={() => setPage((p) => Math.min(pageCount, p + 1))} disabled={safePage >= pageCount} style={{ padding: sqlServerSkin ? '5px 10px' : (isLarge ? '7px 12px' : '3px 8px'), borderRadius: sqlServerSkin ? 4 : 6, border: `1px solid ${sqlServerSkin ? SSMS.line : G.border}`, background: '#fff', color: sqlServerSkin ? SSMS.summaryText : G.text2, fontSize: controlFontSize, cursor: safePage >= pageCount ? 'not-allowed' : 'pointer', opacity: safePage >= pageCount ? 0.5 : 1 }}>Siguiente</button>
+          <span style={{ color: sqlServerSkin ? '#666' : G.dim, fontSize: summaryFontSize, fontFamily: sqlServerSkin ? 'Segoe UI, Tahoma, sans-serif' : 'Inter,sans-serif' }}>⏱ {duration}s</span>
         </div>
       </div>
     </div>
   )
 }
 
-function TabBar({ hasError, hasCross, canClear, onClear, theme = 'light' }) {
+function TabBar({ hasError, hasCross, canClear, onClear, theme = 'light', sqlServerSkin = false }) {
   const isDark = theme === 'dark'
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 12px', background: isDark ? '#102019' : '#fff', borderBottom: `2px solid ${G.primary}`, flexShrink: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderBottom: `2px solid ${G.primary}`, marginBottom: -2, color: hasError ? (isDark ? '#FCA5A5' : '#C62828') : (isDark ? '#E2F5E2' : G.dark), fontSize: '0.78rem', fontWeight: 600, fontFamily: 'Inter,sans-serif' }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: sqlServerSkin ? '0 8px' : '0 12px', background: sqlServerSkin ? '#ECECEC' : (isDark ? '#102019' : '#fff'), borderBottom: sqlServerSkin ? '1px solid #CFCFCF' : `2px solid ${G.primary}`, flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: sqlServerSkin ? '6px 10px' : '7px 12px', borderBottom: sqlServerSkin ? '2px solid #0078D4' : `2px solid ${G.primary}`, marginBottom: sqlServerSkin ? 0 : -2, color: hasError ? (isDark ? '#FCA5A5' : '#C62828') : (sqlServerSkin ? '#1F1F1F' : (isDark ? '#E2F5E2' : G.dark)), fontSize: sqlServerSkin ? '0.74rem' : '0.78rem', fontWeight: 600, fontFamily: sqlServerSkin ? 'Segoe UI, Tahoma, sans-serif' : 'Inter,sans-serif' }}>
         {hasError ? (
           <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
@@ -462,15 +488,15 @@ function TabBar({ hasError, hasCross, canClear, onClear, theme = 'light' }) {
           title="Limpiar resultado"
           style={{
             marginRight: 4,
-            width: 24,
-            height: 24,
-            borderRadius: 6,
-            border: `1px solid ${G.border}`,
-            background: isDark ? '#163326' : '#fff',
-            color: isDark ? '#E2F5E2' : G.text2,
+            width: sqlServerSkin ? 22 : 24,
+            height: sqlServerSkin ? 22 : 24,
+            borderRadius: sqlServerSkin ? 3 : 6,
+            border: `1px solid ${sqlServerSkin ? '#CFCFCF' : G.border}`,
+            background: sqlServerSkin ? '#FFFFFF' : (isDark ? '#163326' : '#fff'),
+            color: sqlServerSkin ? '#2F2F2F' : (isDark ? '#E2F5E2' : G.text2),
             cursor: 'pointer',
             fontWeight: 700,
-            lineHeight: '22px',
+            lineHeight: sqlServerSkin ? '20px' : '22px',
           }}
         >
           x

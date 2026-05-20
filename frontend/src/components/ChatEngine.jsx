@@ -551,9 +551,17 @@ export default function ChatEngine({
 
       const { sql: aiSql, explanation: aiExplanation } = await runAiTask({
         task: 'sql.generate',
-        prompt: text,
+        prompt: `Tabla activa: ${activeTableName || 'sin seleccionar'}\nSolicitud: ${text}`,
         tables,
         history: conversationHistory,
+        context: {
+          activeTableName,
+          recentConversation: conversationHistory.slice(-6),
+          tableSchema: tables.map((t) => ({
+            name: t.name,
+            columns: (t.columns || []).map((c) => ({ name: c.name, type: c.type || 'TEXT' })),
+          })),
+        },
       })
 
       let result = null
@@ -610,6 +618,11 @@ export default function ChatEngine({
             return
           }
         }
+      }
+
+      if (!finalSql) {
+        const localResult = await executeLocalCommand(text)
+        if (localResult.handled) return
       }
 
       onResult?.({

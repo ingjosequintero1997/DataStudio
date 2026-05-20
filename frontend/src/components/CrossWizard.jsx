@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { executeQuery } from '../lib/duckdb'
+import { describeTable, executeQuery, executeStatement } from '../lib/duckdb'
 
 const spring = { type: 'spring', stiffness: 380, damping: 32 }
 const MAX_JOIN_ROWS = 50000
@@ -140,10 +140,58 @@ function buildJoinCondition(matchPairs, rules) {
     .join('\n  AND ')
 }
 
-function buildSQL({ leftTable, rightTable, leftCols, rightCols, joinType, aggOp, aggCol, groupBy, wholeFileMatch, matchPairs, normalizeRules }) {
+function buildLookupProjection(leftCols, selectedLookupColumns, insertAfterColumn, rightAliasPrefix) {
+  const rightProjections = (selectedLookupColumns || []).map((colName) => {
+    const alias = `${rightAliasPrefix}_${colName}`.replace(/\s+/g, '_')
+    return `b."${colName}" AS "${alias}"`
+  })
+
+  if (!leftCols?.length) return rightProjections.join(',\n       ')
+  if (!rightProjections.length) return leftCols.map((col) => `a."${col.name}"`).join(',\n       ')
+
+  if (insertAfterColumn === '__start__') {
+    return [...rightProjections, ...leftCols.map((col) => `a."${col.name}"`)].join(',\n       ')
+  }
+
+  const leftNames = leftCols.map((col) => col.name)
+  const insertAt = insertAfterColumn && leftNames.includes(insertAfterColumn)
+    ? leftNames.indexOf(insertAfterColumn) + 1
+    : leftNames.length
+
+  const before = leftCols.slice(0, insertAt).map((col) => `a."${col.name}"`)
+  const after = leftCols.slice(insertAt).map((col) => `a."${col.name}"`)
+  return [...before, ...rightProjections, ...after].join(',\n       ')
+}
+
+function buildSQL({ leftTable, rightTable, leftCols, rightCols, joinType, aggOp, aggCol, groupBy, wholeFileMatch, matchPairs, normalizeRules, crossMode, lookupColumns, insertAfterColumn }) {
   if (!leftTable || !rightTable || !matchPairs.length) return null
 
   const joinCondition = buildJoinCondition(matchPairs, normalizeRules)
+
+  if (crossMode === 'lookup') {
+    const leftKey = matchPairs[0]?.left
+    const rightKey = matchPairs[0]?.right
+    if (!leftKey || !rightKey || !lookupColumns?.length) return null
+    const leftExpr = buildNormalizedExpr('a', leftKey, normalizeRules)
+    const rightExpr = buildNormalizedExpr('src', rightKey, normalizeRules)
+    const projection = buildLookupProjection(leftCols, lookupColumns, insertAfterColumn, rightTable)
+
+    return [
+      'WITH b_ranked AS (',
+      '  SELECT',
+      '    src.*,',
+      `    ${rightExpr} AS "__norm_key",`,
+      `    ROW_NUMBER() OVER (PARTITION BY ${rightExpr} ORDER BY 1) AS "__rn"`,
+      `  FROM "${rightTable}" src`,
+      ')',
+      `SELECT ${projection}`,
+      `FROM "${leftTable}" a`,
+      'LEFT JOIN b_ranked b',
+      `  ON ${leftExpr} = b."__norm_key"`,
+      ' AND b."__rn" = 1',
+      `LIMIT ${MAX_JOIN_ROWS};`,
+    ].join('\n')
+  }
 
   if (aggOp === 'none') {
     return [
@@ -226,6 +274,10 @@ export default function CrossWizard({ tables, onClose, onResult, onAskAssistant 
   const [sqlOpen, setSqlOpen] = useState(false)
   const [normalizeRules, setNormalizeRules] = useState({ trimValues: true, upperValues: false, alnumOnly: false })
   const [simState, setSimState] = useState({ running: false, step: 0 })
+  const [crossMode, setCrossMode] = useState('join')
+  const [lookupColumns, setLookupColumns] = useState([])
+  const [insertAfterColumn, setInsertAfterColumn] = useState('__end__')
+  const [draggingLookupColumn, setDraggingLookupColumn] = useState(null)
 
   useEffect(() => {
     if (!tables?.length) return
@@ -290,12 +342,55 @@ export default function CrossWizard({ tables, onClose, onResult, onAskAssistant 
     if (!commonPairs.length) next.push('Estos archivos no tienen columnas con el mismo nombre. Necesitas campos equivalentes para cruzarlos.')
     if (wholeFileMatch && commonPairs.length) next.push(`Se cruzaran usando todas las columnas comunes: ${commonPairs.map((pair) => pair.left).join(', ')}`)
     if ((leftMeta?.rowCount || 0) > 100000 || (rightMeta?.rowCount || 0) > 100000) next.push('Archivos grandes detectados. Si tarda, filtra primero o usa Intersección.')
+    if (crossMode === 'lookup' && wholeFileMatch) next.push('Modo BuscarV requiere una columna clave específica por lado, no "todo el archivo".')
     return next
-  }, [commonPairs, wholeFileMatch, leftMeta?.rowCount, rightMeta?.rowCount])
+  }, [commonPairs, wholeFileMatch, leftMeta?.rowCount, rightMeta?.rowCount, crossMode])
+
+  const lookupCandidates = useMemo(() => {
+    if (!rightCols.length) return []
+    const blocked = new Set([rightJoinCol, MATCH_ALL])
+    return rightCols.filter((col) => !blocked.has(col.name))
+  }, [rightCols, rightJoinCol])
+
+  useEffect(() => {
+    if (!rightCols.length) {
+      setLookupColumns([])
+      return
+    }
+    if (!lookupColumns.length) {
+      const firstCandidate = rightCols.find((col) => col.name !== rightJoinCol)
+      if (firstCandidate) setLookupColumns([firstCandidate.name])
+      return
+    }
+    setLookupColumns((prev) => prev.filter((colName) => rightCols.some((col) => col.name === colName)))
+  }, [rightCols, rightJoinCol, lookupColumns.length])
+
+  const addLookupColumn = useCallback((columnName) => {
+    if (!columnName) return
+    setLookupColumns((prev) => (prev.includes(columnName) ? prev : [...prev, columnName]))
+  }, [])
+
+  const removeLookupColumn = useCallback((columnName) => {
+    setLookupColumns((prev) => prev.filter((entry) => entry !== columnName))
+  }, [])
+
+  const moveLookupColumn = useCallback((columnName, direction) => {
+    setLookupColumns((prev) => {
+      const idx = prev.indexOf(columnName)
+      if (idx === -1) return prev
+      const target = direction === 'up' ? idx - 1 : idx + 1
+      if (target < 0 || target >= prev.length) return prev
+      const next = [...prev]
+      const swap = next[target]
+      next[target] = next[idx]
+      next[idx] = swap
+      return next
+    })
+  }, [])
 
   const sqlPreview = useMemo(
-    () => buildSQL({ leftTable, rightTable, leftCols, rightCols, joinType, aggOp, aggCol, groupBy, wholeFileMatch, matchPairs, normalizeRules }),
-    [leftTable, rightTable, leftCols, rightCols, joinType, aggOp, aggCol, groupBy, wholeFileMatch, matchPairs, normalizeRules]
+    () => buildSQL({ leftTable, rightTable, leftCols, rightCols, joinType, aggOp, aggCol, groupBy, wholeFileMatch, matchPairs, normalizeRules, crossMode, lookupColumns, insertAfterColumn }),
+    [leftTable, rightTable, leftCols, rightCols, joinType, aggOp, aggCol, groupBy, wholeFileMatch, matchPairs, normalizeRules, crossMode, lookupColumns, insertAfterColumn]
   )
 
   const needsAggCol = ['sum', 'avg', 'both'].includes(aggOp)
@@ -305,6 +400,7 @@ export default function CrossWizard({ tables, onClose, onResult, onAskAssistant 
     rightTable &&
     leftTable !== rightTable &&
     matchPairs.length &&
+    (crossMode !== 'lookup' || (lookupColumns.length > 0 && !wholeFileMatch)) &&
     (!needsAggCol || aggCol) &&
     (!needsTarget || targetTable)
   )
@@ -412,6 +508,22 @@ export default function CrossWizard({ tables, onClose, onResult, onAskAssistant 
         return acc
       }, { matched: 0, unmatched: 0 })
 
+      let updatedTableMeta = null
+      if (needsTarget && targetTable) {
+        const tmpTable = `__tmp_cross_${Date.now()}`
+        const baseSql = sqlPreview.replace(/;\s*$/, '')
+        await executeStatement(`CREATE TABLE "${tmpTable}" AS ${baseSql}`)
+        await executeStatement(`DROP TABLE IF EXISTS "${targetTable}"`)
+        await executeStatement(`ALTER TABLE "${tmpTable}" RENAME TO "${targetTable}"`)
+        const columns = await describeTable(targetTable)
+        updatedTableMeta = {
+          name: targetTable,
+          rowCount: result.rowCount,
+          columns,
+          source: 'cross_wizard',
+        }
+      }
+
       onResult?.({
         ...result,
         duration: '—',
@@ -434,6 +546,10 @@ export default function CrossWizard({ tables, onClose, onResult, onAskAssistant 
           limited: result.rowCount >= MAX_JOIN_ROWS,
           postAction,
           targetTable,
+          crossMode,
+          lookupColumns,
+          insertAfterColumn,
+          updatedTableMeta,
         },
       })
       onClose()
@@ -626,6 +742,101 @@ export default function CrossWizard({ tables, onClose, onResult, onAskAssistant 
             </div>
           </Section>
 
+          <Section num="2.1" title="Modo de cruce">
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+              <button
+                onClick={() => setCrossMode('join')}
+                className="rounded-lg px-3 py-2.5 text-left text-xs"
+                style={crossMode === 'join' ? cardActive : cardIdle}>
+                <div className="font-bold" style={{ color: G.text }}>Cruce completo</div>
+                <div style={{ color: G.dim }}>Une tablas y devuelve coincidencias con todas las columnas relevantes.</div>
+              </button>
+              <button
+                onClick={() => {
+                  setCrossMode('lookup')
+                  setJoinType('LEFT JOIN')
+                  setAggOp('none')
+                }}
+                className="rounded-lg px-3 py-2.5 text-left text-xs"
+                style={crossMode === 'lookup' ? cardActive : cardIdle}>
+                <div className="font-bold" style={{ color: G.text }}>BuscarV (Excel)</div>
+                <div style={{ color: G.dim }}>Trae columnas de B a A, eligiendo orden y posición en la tabla destino.</div>
+              </button>
+            </div>
+          </Section>
+
+          <AnimatePresence>
+            {crossMode === 'lookup' && (
+              <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                <Section num="2.2" title="Columnas a traer de B">
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div>
+                      <p className="mb-1.5 text-[10px] font-semibold" style={{ color: G.dim }}>Agregar columna desde {rightTable || 'B'}</p>
+                      <select
+                        defaultValue=""
+                        onChange={(event) => {
+                          addLookupColumn(event.target.value)
+                          event.target.value = ''
+                        }}
+                        style={selectStyle}>
+                        <option value="">— Selecciona columna —</option>
+                        {lookupCandidates.map((column) => (
+                          <option key={column.name} value={column.name}>{column.name} ({column.type})</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <p className="mb-1.5 text-[10px] font-semibold" style={{ color: G.dim }}>Posición de inserción en {leftTable || 'A'}</p>
+                      <select value={insertAfterColumn} onChange={(event) => setInsertAfterColumn(event.target.value)} style={selectStyle}>
+                        <option value="__start__">Al inicio de la tabla</option>
+                        {leftCols.map((col) => (
+                          <option key={col.name} value={col.name}>Después de {col.name}</option>
+                        ))}
+                        <option value="__end__">Al final de la tabla</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid gap-2">
+                    {!lookupColumns.length && (
+                      <div className="rounded-lg px-3 py-2 text-xs" style={{ border: `1px dashed ${G.border}`, color: G.dim, background: '#fff' }}>
+                        No hay columnas seleccionadas para traer desde la tabla B.
+                      </div>
+                    )}
+                    {lookupColumns.map((colName) => (
+                      <div
+                        key={colName}
+                        draggable
+                        onDragStart={() => setDraggingLookupColumn(colName)}
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={() => {
+                          if (!draggingLookupColumn || draggingLookupColumn === colName) return
+                          setLookupColumns((prev) => {
+                            const from = prev.indexOf(draggingLookupColumn)
+                            const to = prev.indexOf(colName)
+                            if (from === -1 || to === -1) return prev
+                            const next = [...prev]
+                            const [moved] = next.splice(from, 1)
+                            next.splice(to, 0, moved)
+                            return next
+                          })
+                          setDraggingLookupColumn(null)
+                        }}
+                        className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs"
+                        style={{ border: `1px solid ${G.border}`, background: '#fff' }}>
+                        <span style={{ color: G.dim, cursor: 'grab' }}>⋮⋮</span>
+                        <span className="flex-1" style={{ color: G.text, fontWeight: 700 }}>{colName}</span>
+                        <button onClick={() => moveLookupColumn(colName, 'up')} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: G.dim }}>↑</button>
+                        <button onClick={() => moveLookupColumn(colName, 'down')} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: G.dim }}>↓</button>
+                        <button onClick={() => removeLookupColumn(colName)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#C62828', fontWeight: 700 }}>Quitar</button>
+                      </div>
+                    ))}
+                  </div>
+                </Section>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           <Section num="2.2" title="Auto-corrección de claves">
             <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
               {[
@@ -709,8 +920,9 @@ export default function CrossWizard({ tables, onClose, onResult, onAskAssistant 
             <div className="grid grid-cols-2 gap-2">
               {JOIN_TYPES.map((join) => {
                 const selected = join.value === joinType
+                const disabledByLookup = crossMode === 'lookup' && join.value !== 'LEFT JOIN'
                 return (
-                  <motion.button key={join.value} whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} onClick={() => setJoinType(join.value)} className="rounded-lg px-3 py-2.5 text-left text-xs transition-all" style={selected ? cardActive : cardIdle}>
+                  <motion.button key={join.value} whileHover={!disabledByLookup ? { scale: 1.01 } : {}} whileTap={!disabledByLookup ? { scale: 0.98 } : {}} onClick={() => !disabledByLookup && setJoinType(join.value)} className="rounded-lg px-3 py-2.5 text-left text-xs transition-all" style={{ ...(selected ? cardActive : cardIdle), opacity: disabledByLookup ? 0.46 : 1, cursor: disabledByLookup ? 'not-allowed' : 'pointer' }}>
                     <span className="mr-1.5 text-base">{join.icon}</span>
                     <span className="font-bold" style={{ color: selected ? G.dark : G.text }}>{join.label}</span>
                     <div className="mt-0.5" style={{ color: G.dim }}>{join.desc}</div>
@@ -724,8 +936,9 @@ export default function CrossWizard({ tables, onClose, onResult, onAskAssistant 
             <div className="grid grid-cols-3 gap-2">
               {AGG_OPS.map((op) => {
                 const selected = op.value === aggOp
+                const disabledByLookup = crossMode === 'lookup' && op.value !== 'none'
                 return (
-                  <motion.button key={op.value} whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} onClick={() => setAggOp(op.value)} className="rounded-lg px-3 py-2.5 text-left text-xs transition-all" style={selected ? cardActive : cardIdle}>
+                  <motion.button key={op.value} whileHover={!disabledByLookup ? { scale: 1.01 } : {}} whileTap={!disabledByLookup ? { scale: 0.98 } : {}} onClick={() => !disabledByLookup && setAggOp(op.value)} className="rounded-lg px-3 py-2.5 text-left text-xs transition-all" style={{ ...(selected ? cardActive : cardIdle), opacity: disabledByLookup ? 0.46 : 1, cursor: disabledByLookup ? 'not-allowed' : 'pointer' }}>
                     <div className="mb-0.5 text-base">{op.icon}</div>
                     <div className="font-bold leading-tight" style={{ color: selected ? G.dark : G.text }}>{op.label}</div>
                     <div className="mt-0.5 leading-snug" style={{ color: G.dim }}>{op.desc}</div>
